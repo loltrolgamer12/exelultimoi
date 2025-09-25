@@ -1,0 +1,13 @@
+# Ignorar dependencias y cachés
+node_modules/
+.cache/
+# Ignorar archivos de entorno
+.env
+# Ignorar archivos de logs
+*.log
+# Ignorar archivos de sistema
+.DS_Store
+Thumbs.db
+# Ignorar archivos de compilación
+/dist
+/build
