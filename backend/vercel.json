@@ -1,0 +1,181 @@
+{
+  "version": 2,
+  "name": "sistema-hq-fo-40-backend",
+  "alias": ["backexelv2.vercel.app", "hq-fo-40-api.vercel.app"],
+  "regions": ["iad1", "fra1"],
+  "env": {
+    "NODE_ENV": "production",
+    "DATABASE_URL": "@database_url",
+    "FRONTEND_URL": "@frontend_url",
+    "JWT_SECRET": "@jwt_secret"
+  },
+  "build": {
+    "env": {
+      "NODE_ENV": "production",
+      "GENERATE_SOURCEMAP": "false"
+    }
+  },
+  "functions": {
+    "server.js": {
+      "maxDuration": 60
+    },
+    "src/services/pdfReportService.js": {
+      "maxDuration": 120
+    },
+    "src/controllers/uploadController.js": {
+      "maxDuration": 180
+    },
+    "src/services/excelService.js": {
+      "maxDuration": 300
+    }
+  },
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "src/**",
+          "prisma/**",
+          "package.json",
+          "node_modules/.prisma/**",
+          "node_modules/@prisma/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/health",
+      "dest": "/server.js",
+      "methods": ["GET"]
+    },
+    {
+      "src": "/api/info",
+      "dest": "/server.js", 
+      "methods": ["GET"]
+    },
+    {
+      "src": "/api/upload/(.*)",
+      "dest": "/server.js",
+      "methods": ["GET", "POST", "DELETE"]
+    },
+    {
+      "src": "/api/search/(.*)",
+      "dest": "/server.js",
+      "methods": ["GET", "POST"]
+    },
+    {
+      "src": "/api/dashboard/(.*)",
+      "dest": "/server.js",
+      "methods": ["GET", "POST"]
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/server.js"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-Requested-With"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "X-API-Version",
+          "value": "2.0.0"
+        },
+        {
+          "key": "X-Powered-By",
+          "value": "Sistema-HQ-FO-40"
+        }
+      ]
+    },
+    {
+      "source": "/api/dashboard/pdf/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control", 
+          "value": "private, no-cache, no-store, must-revalidate"
+        },
+        {
+          "key": "Content-Type",
+          "value": "application/pdf"
+        }
+      ]
+    },
+    {
+      "source": "/api/health",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/v2/(.*)",
+      "destination": "/api/$1"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/api/info",
+      "permanent": false
+    },
+    {
+      "source": "/docs",
+      "destination": "/api/info",
+      "permanent": false
+    }
+  ],
+  "trailingSlash": false,
+  "cleanUrls": true,
+  "framework": null,
+  "installCommand": "npm ci --production=false",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "crons": [
+    {
+      "path": "/api/maintenance/cleanup",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/maintenance/health-check",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}
