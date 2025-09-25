@@ -536,7 +536,7 @@ class DashboardController {
 
       // Conductores con patrones problemáticos
       const conductoresProblematicos = await prisma.inspeccion.groupBy({
-        by: ['conductor_cedula', 'conductor_nombre'],
+  by: ['conductor_nombre'],
         where: {
           fecha: { gte: treintaDiasAtras },
           OR: [
@@ -568,7 +568,7 @@ class DashboardController {
           problemas: item._count
         })),
         conductoresEnRiesgo: conductoresProblematicos.map(item => ({
-          cedula: item.conductor_cedula,
+          // cedula eliminado
           nombre: item.conductor_nombre,
           problemasRecientes: item._count
         })),
@@ -775,7 +775,7 @@ class DashboardController {
     // Implementación placeholder
     return Array.from({ length: Math.min(limit, 5) }, (_, i) => ({
       nombre: `Conductor ${i + 1}`,
-      cedula: `12345${i}`,
+  // cedula eliminado
       alertas: Math.floor(Math.random() * 10) + 1
     }));
   }

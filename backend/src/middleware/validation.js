@@ -694,11 +694,6 @@ const validatePlacaColombia = (placa) => {
   return patrones.some(patron => patron.test(placaLimpia));
 };
 
-// Validar formato de cédula colombiana básico
-const validateCedulaColombia = (cedula) => {
-  const cedulaLimpia = cedula.replace(/\D/g, '');
-  return cedulaLimpia.length >= 6 && cedulaLimpia.length <= 12 && /^\d+$/.test(cedulaLimpia);
-};
 
 // 📤 **EXPORTAR TODAS LAS VALIDACIONES**
 
@@ -721,6 +716,5 @@ module.exports = {
   
   // Utilidades
   sanitizeString,
-  validatePlacaColombia,
-  validateCedulaColombia
+  validatePlacaColombia
 };

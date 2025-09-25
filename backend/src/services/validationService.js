@@ -97,10 +97,6 @@ class ValidationService {
 
   // 📝 Validar formatos de campos
   validateFieldFormats(record, errors, warnings) {
-    // Validar cédula si existe
-    if (record.conductor_cedula && !this.validateCedula(record.conductor_cedula)) {
-      warnings.push('Formato de cédula posiblemente inválido');
-    }
     
     // Validar email si existe
     if (record.email && !this.validateEmail(record.email)) {
@@ -260,7 +256,7 @@ class ValidationService {
     
     // Limpiar strings
     const stringFields = [
-      'conductor_nombre', 'conductor_cedula', 'placa_vehiculo',
+      'conductor_nombre', 'placa_vehiculo',
       'contrato', 'campo', 'empresa_contratista', 'observaciones',
       'inspector_nombre', 'turno'
     ];
@@ -374,11 +370,6 @@ class ValidationService {
     return patrones.some(patron => patron.test(placaLimpia));
   }
 
-  validateCedula(cedula) {
-    // Validación básica de cédula colombiana
-    const cedulaLimpia = cedula.replace(/\D/g, '');
-    return cedulaLimpia.length >= 6 && cedulaLimpia.length <= 12 && /^\d+$/.test(cedulaLimpia);
-  }
 
   validateEmail(email) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

@@ -181,7 +181,7 @@ class ExcelService {
     if (header.includes('hora') || header.includes('time')) mappings.push('hora');
     if (header.includes('placa') || header.includes('plate')) mappings.push('placa_vehiculo');
     if (header.includes('conductor') || header.includes('driver')) mappings.push('conductor_nombre');
-    if (header.includes('cedula') || header.includes('id')) mappings.push('conductor_cedula');
+
     if (header.includes('contrato') || header.includes('contract')) mappings.push('contrato');
     if (header.includes('turno') || header.includes('shift')) mappings.push('turno');
     
@@ -354,9 +354,8 @@ class ExcelService {
       marca_vehiculo: cleanString(rawRecord['Marca'] || rawRecord['marca'] || ''),
       
       // Información del conductor
-      conductor_nombre: cleanString(rawRecord['Conductor'] || rawRecord['conductor'] || rawRecord['Nombre Conductor'] || ''),
-      conductor_cedula: cleanString(rawRecord['Cédula'] || rawRecord['cedula'] || rawRecord['Cedula'] || ''),
-      conductor_licencia: cleanString(rawRecord['Licencia'] || rawRecord['licencia'] || ''),
+  conductor_nombre: cleanString(rawRecord['Conductor'] || rawRecord['conductor'] || rawRecord['Nombre Conductor'] || ''),
+  conductor_licencia: cleanString(rawRecord['Licencia'] || rawRecord['licencia'] || ''),
       
       // Información contractual
       contrato: cleanString(rawRecord['Contrato'] || rawRecord['contrato'] || ''),
@@ -479,8 +478,8 @@ class ExcelService {
     const seenKeys = new Set();
     
     for (const record of records) {
-      // Crear clave única basada en fecha, conductor y placa
-      const uniqueKey = `${record.fecha?.toISOString().split('T')[0] || 'no-fecha'}-${record.conductor_cedula || record.conductor_nombre}-${record.placa_vehiculo}`;
+  // Crear clave única basada en fecha, conductor y placa
+  const uniqueKey = `${record.fecha?.toISOString().split('T')[0] || 'no-fecha'}-${record.conductor_nombre}-${record.placa_vehiculo}`;
       
       if (!seenKeys.has(uniqueKey)) {
         seenKeys.add(uniqueKey);
