@@ -115,7 +115,7 @@ const corsOptions = {
 };
 
 // 📊 Middleware de logging para CORS
-const corsMiddleware = cors(corsOptions);
+let corsMiddleware = cors(corsOptions);
 
 const corsWithLogging = (req, res, next) => {
   // Log detallado de requests CORS

@@ -199,7 +199,7 @@ class DashboardController {
       );
 
       const response = {
-        alertasActivas: filteredAlerts,
+        ultimasAlertas: Array.isArray(filteredAlerts) ? filteredAlerts : [],
         estadisticas: alertStats,
         tendencias: alertTrends,
         analisisFatiga: fatigueAnalysis, // 🚨 NUEVO
@@ -775,7 +775,7 @@ class DashboardController {
     // Implementación placeholder
     return Array.from({ length: Math.min(limit, 5) }, (_, i) => ({
       nombre: `Conductor ${i + 1}`,
-  // cedula eliminado
+  
       alertas: Math.floor(Math.random() * 10) + 1
     }));
   }

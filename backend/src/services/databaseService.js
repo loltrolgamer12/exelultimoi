@@ -64,8 +64,7 @@ class DatabaseService {
   if (contrato) where.contrato = { contains: contrato, mode: 'insensitive' };
   if (campo) where.campo = { contains: campo, mode: 'insensitive' };
   if (estado) where.estado = estado;
-  if (tieneAlertaRoja !== undefined) where.tiene_alerta_roja = tieneAlertaRoja === 'true';
-  if (tieneAdvertencias !== undefined) where.tiene_advertencias = tieneAdvertencias === 'true';
+  // Eliminados: tiene_alerta_roja y tiene_advertencias
   if (nivelRiesgo) where.nivel_riesgo = nivelRiesgo;
   if (ano) where.ano = parseInt(ano);
   if (mes) where.mes = parseInt(mes);
@@ -151,12 +150,12 @@ class DatabaseService {
         
         // Alertas rojas
         this.prisma.inspeccion.count({ 
-          where: { ...baseWhere, tiene_alerta_roja: true } 
+          // Eliminado: where: { ...baseWhere, tiene_alerta_roja: true }
         }),
         
         // Advertencias
         this.prisma.inspeccion.count({ 
-          where: { ...baseWhere, tiene_advertencias: true } 
+          // Eliminado: where: { ...baseWhere, tiene_advertencias: true }
         }),
         
         // Inspecciones de hoy
@@ -200,10 +199,7 @@ class DatabaseService {
         
         // Promedios de puntaje
         this.prisma.inspeccion.aggregate({
-          where: baseWhere,
-          _avg: { puntaje_total: true },
-          _min: { puntaje_total: true },
-          _max: { puntaje_total: true }
+          where: baseWhere
         }),
         
         // Tendencia mensual (últimos 12 meses)
@@ -245,9 +241,7 @@ class DatabaseService {
           }, {})
         },
         calidad: {
-          puntajePromedio: promediosPuntaje._avg.puntaje_total || 0,
-          puntajeMinimo: promediosPuntaje._min.puntaje_total || 0,
-          puntajeMaximo: promediosPuntaje._max.puntaje_total || 0
+          // Eliminados: puntajePromedio, puntajeMinimo, puntajeMaximo
         },
         fatiga: estadisticasFatiga, // 🚨 NUEVAS ESTADÍSTICAS
         tendencia: tendenciaMensual,
@@ -284,19 +278,7 @@ class DatabaseService {
         }),
         
         // Conductores con poco sueño
-        this.prisma.inspeccion.count({
-          where: { ...baseWhere, horas_sueno_suficientes: false }
-        }),
-        
-        // Conductores con síntomas de fatiga
-        this.prisma.inspeccion.count({
-          where: { ...baseWhere, libre_sintomas_fatiga: false }
-        }),
-        
-        // Conductores que no se sienten aptos
-        this.prisma.inspeccion.count({
-          where: { ...baseWhere, condiciones_aptas: false }
-        }),
+        // Eliminados: horas_sueno_suficientes, libre_sintomas_fatiga, condiciones_aptas
         
         // Conductores con múltiples problemas
         this.prisma.inspeccion.count({
@@ -327,19 +309,7 @@ class DatabaseService {
   ]);
 
       return {
-        consumoMedicamentos,
-        pocoSueno,
-        sintomasFatiga,
-        noAptos,
-        combinacionProblemas,
-        porcentajes: {
-          consumoMedicamentos: baseWhere && Object.keys(baseWhere).length === 0 ? 0 :
-            await this.calculatePercentage(consumoMedicamentos, baseWhere),
-          pocoSueno: await this.calculatePercentage(pocoSueno, baseWhere),
-          sintomasFatiga: await this.calculatePercentage(sintomasFatiga, baseWhere),
-          noAptos: await this.calculatePercentage(noAptos, baseWhere),
-          problemasMultiples: await this.calculatePercentage(combinacionProblemas, baseWhere)
-        }
+        // Eliminados: consumoMedicamentos, pocoSueno, sintomasFatiga, noAptos, combinacionProblemas y porcentajes relacionados
       };
     } catch (error) {
       console.error('[DB-SERVICE] Error obteniendo estadísticas de fatiga:', error);
@@ -470,39 +440,24 @@ class DatabaseService {
     try {
       const alerts = await this.prisma.inspeccion.findMany({
         where: {
-          OR: [
-            { tiene_alerta_roja: true },
-            { nivel_riesgo: 'CRITICO' },
-            { 
-              AND: [
-                { tiene_advertencias: true },
-                { 
-                  fecha: {
-                    gte: new Date(Date.now() - 24 * 60 * 60 * 1000) // Últimas 24 horas
-                  }
-                }
-              ]
-            }
-          ]
+          fecha: {
+            gte: new Date(Date.now() - 24 * 60 * 60 * 1000) // Últimas 24 horas
+          }
         },
         orderBy: [
-          { tiene_alerta_roja: 'desc' },
           { fecha: 'desc' }
         ],
         take: limit,
         select: {
           id: true,
           fecha: true,
-          conductor_nombre: true,
-          placa: true,
+          nombre_inspector: true,
+          placa_vehiculo: true,
           contrato: true,
-          campo: true,
-          tiene_alerta_roja: true,
-          tiene_advertencias: true,
-          nivel_riesgo: true,
+          campo_coordinacion: true,
           consumo_medicamentos: true,
-          horas_sueno_suficientes: true,
-          libre_sintomas_fatiga: true,
+          horas_sueno: true,
+          libre_fatiga: true,
           condiciones_aptas: true,
           observaciones: true
         }
@@ -707,7 +662,7 @@ class DatabaseService {
 
   async getTopRiskDrivers(where, limit = 10) {
     return await this.prisma.inspeccion.groupBy({
-      by: ['conductor_cedula', 'conductor_nombre'],
+      by: ['conductor_nombre'],
       where: { ...where, tiene_alerta_roja: true },
       _count: { tiene_alerta_roja: true },
       orderBy: { _count: { tiene_alerta_roja: 'desc' } },

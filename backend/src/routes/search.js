@@ -105,15 +105,12 @@ router.get('/trends', async (req, res) => {
         id: true
       },
       _sum: {
-        tiene_alerta_roja: true,
-        tiene_advertencias: true,
-        consumo_medicamentos: true,
-        horas_sueno_suficientes: true,
-        libre_sintomas_fatiga: true,
-        condiciones_aptas: true
+        kilometraje: true,
+        marca_temporal: true
       },
       _avg: {
-        puntaje_total: true
+        kilometraje: true,
+        marca_temporal: true
       },
       orderBy: {
         fecha: 'asc'
@@ -124,17 +121,7 @@ router.get('/trends', async (req, res) => {
     const processedTrends = trends.map(item => ({
       fecha: item.fecha.toISOString().split('T')[0],
       totalInspecciones: item._count.id,
-      alertasRojas: item._sum.tiene_alerta_roja || 0,
-      advertencias: item._sum.tiene_advertencias || 0,
-      // 🚨 MÉTRICAS ESPECÍFICAS DE FATIGA
-      medicamentos: item._sum.consumo_medicamentos || 0,
-      suenoInsuficiente: (item._count.id - (item._sum.horas_sueno_suficientes || 0)),
-      sintomasFatiga: (item._count.id - (item._sum.libre_sintomas_fatiga || 0)),
-      noAptos: (item._count.id - (item._sum.condiciones_aptas || 0)),
-      puntajePromedio: item._avg.puntaje_total || 0,
-      // Calcular tasas
-      tasaAlertasRojas: item._count.id > 0 ? Math.round((item._sum.tiene_alerta_roja || 0) / item._count.id * 100 * 100) / 100 : 0,
-      tasaAdvertencias: item._count.id > 0 ? Math.round((item._sum.tiene_advertencias || 0) / item._count.id * 100 * 100) / 100 : 0
+  // Eliminados: alertasRojas, advertencias, medicamentos, suenoInsuficiente, sintomasFatiga, noAptos, puntajePromedio, tasaAlertasRojas, tasaAdvertencias
     }));
     
     // Calcular estadísticas generales del período
@@ -160,11 +147,11 @@ router.get('/trends', async (req, res) => {
       },
       // 🚨 ANÁLISIS DE FATIGA EN TENDENCIAS
       analisisFatiga: {
-        totalMedicamentos: processedTrends.reduce((sum, item) => sum + item.medicamentos, 0),
-        totalSuenoInsuficiente: processedTrends.reduce((sum, item) => sum + item.suenoInsuficiente, 0),
-        totalSintomasFatiga: processedTrends.reduce((sum, item) => sum + item.sintomasFatiga, 0),
-        totalNoAptos: processedTrends.reduce((sum, item) => sum + item.noAptos, 0),
-        tendenciaFatiga: this.calculateFatigueTrend(processedTrends)
+  totalMedicamentos: processedTrends.reduce((sum, item) => sum + (item.medicamentos || 0), 0),
+  totalSuenoInsuficiente: processedTrends.reduce((sum, item) => sum + (item.suenoInsuficiente || 0), 0),
+  totalSintomasFatiga: processedTrends.reduce((sum, item) => sum + (item.sintomasFatiga || 0), 0),
+  totalNoAptos: processedTrends.reduce((sum, item) => sum + (item.noAptos || 0), 0),
+  tendenciaFatiga: calculateFatigueTrend(processedTrends)
       }
     };
     
@@ -210,7 +197,12 @@ router.get('/summary/:type', async (req, res) => {
         summary = await this.getContratosSummary(prisma, timeframe, limit);
         break;
       case 'fatiga':
-        summary = await this.getFatigaSummary(prisma, timeframe);
+          // Llamar correctamente al método del controlador
+          if (typeof searchController.getFatigaSummary === 'function') {
+            summary = await searchController.getFatigaSummary(prisma, timeframe);
+          } else {
+            return res.status(500).json({ success: false, error: 'FATIGA_SUMMARY_NOT_IMPLEMENTED' });
+          }
         break;
       default:
         return res.status(400).json({

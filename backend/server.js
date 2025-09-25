@@ -9,7 +9,7 @@ const rateLimit = require('express-rate-limit');
 // 📁 Importaciones internas
 const corsConfig = require('./src/config/cors');
 const { connectDatabase, disconnectDatabase } = require('./src/config/database');
-const errorHandler = require('./src/middleware/errorHandler');
+const { errorHandler } = require('./src/middleware/errorHandler');
 
 // 📍 Rutas
 const uploadRoutes = require('./src/routes/upload');

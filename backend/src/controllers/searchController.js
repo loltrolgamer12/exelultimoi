@@ -9,6 +9,86 @@ class SearchController {
   constructor() {
     this.dbService = new DatabaseService();
   }
+    // 📊 Resumen de fatiga
+    async getFatigaSummary(prisma, timeframe = '1month') {
+      // Definir rango de fechas
+      const now = new Date();
+      let startDate = new Date(now);
+      if (timeframe === '1week') startDate.setDate(now.getDate() - 7);
+      else if (timeframe === '1month') startDate.setMonth(now.getMonth() - 1);
+      else if (timeframe === '3months') startDate.setMonth(now.getMonth() - 3);
+      else if (timeframe === '6months') startDate.setMonth(now.getMonth() - 6);
+      else if (timeframe === '1year') startDate.setFullYear(now.getFullYear() - 1);
+
+      // Consulta agregada por día
+      const result = await prisma.inspeccion.groupBy({
+        by: ['fecha'],
+        where: {
+          fecha: {
+            gte: startDate,
+            lte: now
+          }
+        },
+        orderBy: { fecha: 'asc' },
+        _count: { id: true },
+        _sum: {
+          kilometraje: true,
+          marca_temporal: true
+        },
+        _avg: {
+          kilometraje: true,
+          marca_temporal: true
+        }
+      });
+
+      // Métricas de fatiga (conteo de booleanos)
+      const totalMedicamentos = await prisma.inspeccion.count({
+        where: {
+          fecha: {
+            gte: startDate,
+            lte: now
+          },
+          consumo_medicamentos: true
+        }
+      });
+      const totalSueno = await prisma.inspeccion.count({
+        where: {
+          fecha: {
+            gte: startDate,
+            lte: now
+          },
+          horas_sueno: true
+        }
+      });
+      const totalLibreFatiga = await prisma.inspeccion.count({
+        where: {
+          fecha: {
+            gte: startDate,
+            lte: now
+          },
+          libre_fatiga: true
+        }
+      });
+      const totalAptos = await prisma.inspeccion.count({
+        where: {
+          fecha: {
+            gte: startDate,
+            lte: now
+          },
+          condiciones_aptas: true
+        }
+      });
+
+      return {
+        tendencia: result,
+        resumen: {
+          totalMedicamentos,
+          totalSueno,
+          totalLibreFatiga,
+          totalAptos
+        }
+      };
+    }
 
   // 🔍 Búsqueda general de inspecciones
   async searchInspections(req, res) {
@@ -364,21 +444,7 @@ class SearchController {
       // Generar recomendaciones de acción
       const actionPlan = this.generateAlertActionPlan(filteredAlerts);
 
-      const response = {
-        alertas: filteredAlerts,
-        resumen: {
-          total: filteredAlerts.length,
-          criticas: filteredAlerts.filter(a => a.severity === 'CRITICO').length,
-          altas: filteredAlerts.filter(a => a.severity === 'ALTO').length,
-          medias: filteredAlerts.filter(a => a.severity === 'MEDIO').length
-        },
-        agrupacion: alertSummary,
-        planAccion: actionPlan,
-        estadisticas: {
-          timeframe,
-          generadoEn: new Date().toISOString()
-        }
-      };
+      const response = Array.isArray(filteredAlerts) ? filteredAlerts : [];
 
       console.log(`[SEARCH] ✅ Alertas activas obtenidas: ${filteredAlerts.length} alertas`);
 

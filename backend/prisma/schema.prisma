@@ -13,10 +13,8 @@ datasource db {
 // 🚗 Modelo principal de inspecciones vehiculares
 model Inspeccion {
   id                    String    @id @default(cuid())
-  
   // 📅 Información temporal
   fecha                 DateTime  @db.Date
-  id                    String    @id @default(cuid())
   marca_temporal        Float     // Marca temporal del Excel
   nombre_inspector      String    @db.VarChar(200)
   contrato              String    @db.VarChar(100)
@@ -68,21 +66,15 @@ model Inspeccion {
   condiciones_aptas     Boolean
   consumo_medicamentos  Boolean
   placa_vehiculo_extra  String?   @db.VarChar(20)
+  tiene_alerta_roja     Boolean   @default(false)
+  tiene_advertencias    Boolean   @default(false)
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   historial             HistorialConductor[]
   @@index([marca_temporal, turno])
   @@index([placa_vehiculo])
   @@index([contrato, campo_coordinacion])
-  @@map("inspecciones")
-  historial             HistorialConductor[]
-  
-  // 🔍 Índices para optimización
   @@index([fecha, turno])
-  @@index([placa_vehiculo])
-  @@index([contrato, campo])
-  @@index([ano, mes])
-  @@index([tiene_alerta_roja, tiene_advertencias])
   @@map("inspecciones")
 }
 

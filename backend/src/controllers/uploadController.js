@@ -47,39 +47,22 @@ class UploadController {
       const existingFile = await excelService.checkDuplicateFile(analysis.fileHash);
       
       const response = {
-        valid: true,
-        filename: file.originalname,
+        isValid: (analysis.warnings.length === 0 && (!analysis.errors || analysis.errors.length === 0)),
+        fileName: file.originalname,
         fileSize: file.size,
-        fileSizeMB: Math.round(file.size / 1024 / 1024 * 100) / 100,
-        analysis: {
-          totalRows: analysis.totalRows,
-          totalColumns: analysis.totalColumns,
-          headers: analysis.headers,
-          dateInfo: analysis.dateInfo,
-          estimatedProcessingTime: analysis.estimatedProcessingTime,
-          columnAnalysis: analysis.columnAnalysis.slice(0, 10) // Primeras 10 columnas
-        },
-        warnings: analysis.warnings,
-        isDuplicate: !!existingFile,
-        duplicateInfo: existingFile ? {
-          processedDate: existingFile.fecha_procesamiento,
-          totalRecords: existingFile.total_registros,
-          newRecords: existingFile.registros_nuevos
-        } : null,
-        recommendations: this.generateRecommendations(analysis),
-        preview: {
-          sampleData: analysis.sampleData.slice(0, 3),
-          detectedPeriod: `${analysis.dateInfo.año} - Meses: ${analysis.dateInfo.meses.join(', ')}`,
-          isAnnualFile: analysis.dateInfo.esArchivoAnual,
-          isMonthlyFile: analysis.dateInfo.esArchivoMensual
-        }
+        detectedYear: analysis.dateInfo?.año,
+        detectedMonths: analysis.dateInfo?.meses || [],
+        estimatedRecords: analysis.totalRows,
+        errors: analysis.errors || [],
+        warnings: analysis.warnings || [],
+        recommendations: this.generateRecommendations(analysis)
       };
       
       console.log('[UPLOAD] ✅ Validación exitosa:', {
         filename: file.originalname,
         rows: analysis.totalRows,
-        period: response.preview.detectedPeriod,
-        isDuplicate: response.isDuplicate
+        year: response.detectedYear,
+        months: response.detectedMonths
       });
       
       return successResponse(res, response, 'Archivo validado exitosamente');
@@ -231,39 +214,25 @@ class UploadController {
       });
       
       const response = {
-        archivos: archivos.map(archivo => ({
-          ...archivo,
-          hasErrors: archivo.errores_validacion && archivo.errores_validacion.length > 0,
-          hasWarnings: archivo.advertencias && archivo.advertencias.length > 0,
-          processingTimeMins: archivo.tiempo_procesamiento ? 
-            Math.round(archivo.tiempo_procesamiento / 60 * 100) / 100 : null,
-          periodDescription: archivo.meses_detectados.length > 0 ?
-            `${archivo.ano_detectado} - ${archivo.meses_detectados.length} meses` :
-            `${archivo.ano_detectado}`
+        uploads: archivos.map(archivo => ({
+          id: archivo.id,
+          fileName: archivo.nombre_archivo,
+          uploadDate: archivo.fecha_procesamiento,
+          totalRecords: archivo.total_registros,
+          newRecords: archivo.registros_nuevos,
+          duplicateRecords: archivo.registros_duplicados,
+          processingTime: archivo.tiempo_procesamiento,
+          status: archivo.estado_procesamiento,
+          user: archivo.usuario || undefined
         })),
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(total / parseInt(limit)),
-          totalItems: total,
-          itemsPerPage: parseInt(limit),
-          hasNext: skip + parseInt(limit) < total,
-          hasPrev: parseInt(page) > 1
-        },
-        statistics: {
-          totalArchivos: stats._count,
-          totalRegistros: stats._sum.total_registros || 0,
-          totalNuevos: stats._sum.registros_nuevos || 0,
-          totalDuplicados: stats._sum.registros_duplicados || 0,
-          tiempoPromedioMinutos: stats._avg.tiempo_procesamiento ? 
-            Math.round(stats._avg.tiempo_procesamiento / 60 * 100) / 100 : 0
-        }
+        totalCount: total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+        currentPage: parseInt(page)
       };
-      
       console.log('[UPLOAD] ✅ Historial obtenido:', {
-        archivos: response.archivos.length,
-        total: response.pagination.totalItems
+        uploads: response.uploads.length,
+        total: response.totalCount
       });
-      
       return successResponse(res, response, 'Historial obtenido exitosamente');
       
     } catch (error) {
