@@ -1,8 +1,17 @@
 // 📄 ARCHIVO: backend/src/services/validationService.js
-// 🔧 VERSIÓN CORREGIDA con validaciones mejoradas basadas en análisis Excel
+// 🔧 VERSIÓN CORREGIDA con validaciones estrictas
 
 class ValidationService {
   constructor() {
+    // 📋 CAMPOS OBLIGATORIOS (CRÍTICOS)
+    this.requiredFields = [
+      'fecha',
+      'conductor_nombre', 
+      'placa_vehiculo',
+      'contrato',
+      'turno'
+    ];
+
     // 🎯 CONFIGURACIÓN DE VALIDACIONES
     this.config = {
       // Rangos de puntajes
@@ -15,51 +24,17 @@ class ValidationService {
       
       // Pesos para cálculo de riesgo
       riskWeights: {
-        medicamentos: 50,        // Peso más alto - crítico
-        fatiga: 15,             // Por cada problema de fatiga  
-        vehiculo: 10,           // Por cada problema vehicular
-        mantenimiento: 5        // Problemas menores
-      },
-      
-      // Umbrales de alerta
-      thresholds: {
-        fatigueProblemsForHigh: 2,  // 2+ problemas = ALTO
-        vehicleProblemsForMedium: 2 // 2+ problemas = MEDIO
+        medicamentos: 50,
+        fatiga: 15,
+        vehiculo: 10,
+        mantenimiento: 5
       }
     };
-
-    // 📋 CAMPOS OBLIGATORIOS (según análisis Excel)
-    this.requiredFields = [
-      'fecha',
-      'conductor_nombre', 
-      'placa_vehiculo',
-      'contrato',
-      'turno'
-    ];
-
-    // 🚨 CAMPOS DE FATIGA CRÍTICOS
-    this.fatigueFields = [
-      'consumo_medicamentos',
-      'horas_sueno_suficientes',
-      'libre_sintomas_fatiga', 
-      'condiciones_aptas'
-    ];
-
-    // 🔧 CAMPOS DE INSPECCIÓN VEHICULAR
-    this.vehicleFields = [
-      'frenos_funcionando',
-      'cinturones_seguros',
-      'luces_funcionando',
-      'extintor_vigente',
-      'botiquin_completo',
-      'neumaticos_estado',
-      'espejos_estado'
-    ];
   }
 
   // 🔍 VALIDACIÓN COMPLETA DE REGISTRO
   validateRecord(record) {
-    console.log('[VALIDATION] 🔍 Validando registro:', record.placa_vehiculo);
+    console.log(`[VALIDATION] 🔍 Validando registro: ${record.placa_vehiculo || 'SIN_PLACA'}`);
     
     const validationResult = {
       isValid: true,
@@ -71,18 +46,27 @@ class ValidationService {
       metadata: {
         timestamp: new Date().toISOString(),
         validatedFields: 0,
-        totalFields: Object.keys(record).length
+        totalFields: Object.keys(record).length,
+        recordId: record.id
       }
     };
 
     try {
-      // 1. Validar campos obligatorios
+      // 🚨 PASO 1: VALIDACIÓN CRÍTICA DE CAMPOS OBLIGATORIOS
       this.validateRequiredFields(record, validationResult);
+      
+      // ⚠️ Si faltan campos obligatorios, DETENER validación
+      if (validationResult.errors.length > 0) {
+        validationResult.isValid = false;
+        console.error(`[VALIDATION] ❌ VALIDACIÓN FALLIDA - Campos obligatorios faltantes:`, 
+          validationResult.errors.map(e => e.field));
+        return validationResult;
+      }
       
       // 2. Validar formatos específicos
       this.validateFormats(record, validationResult);
       
-      // 3. Validar lógica de negocio (fatiga)
+      // 3. Validar lógica de negocio
       this.validateBusinessLogic(record, validationResult);
       
       // 4. Calcular nivel de riesgo
@@ -107,28 +91,58 @@ class ValidationService {
     } catch (error) {
       console.error('[VALIDATION] ❌ Error en validación:', error);
       validationResult.isValid = false;
-      validationResult.errors.push(`Error interno de validación: ${error.message}`);
+      validationResult.errors.push({
+        type: 'VALIDATION_ERROR',
+        field: 'SYSTEM',
+        message: `Error interno de validación: ${error.message}`,
+        severity: 'ERROR'
+      });
     }
 
     return validationResult;
   }
 
-  // ✅ VALIDAR CAMPOS OBLIGATORIOS
+  // ✅ VALIDAR CAMPOS OBLIGATORIOS (CRÍTICO)
   validateRequiredFields(record, result) {
+    console.log('[VALIDATION] 🔍 Validando campos obligatorios...');
+    
+    const errors = [];
+    
     this.requiredFields.forEach(field => {
       const value = record[field];
       
-      if (value === null || value === undefined || value === '') {
-        result.errors.push({
+      // ⚠️ VALIDACIÓN ESTRICTA: null, undefined, string vacío, solo espacios
+      const isEmpty = value === null || 
+                     value === undefined || 
+                     value === '' || 
+                     (typeof value === 'string' && value.trim() === '');
+      
+      if (isEmpty) {
+        const error = {
           field: field,
           type: 'REQUIRED_FIELD',
           message: `Campo obligatorio faltante: ${field}`,
-          severity: 'ERROR'
-        });
+          severity: 'ERROR',
+          value: value, // Incluir el valor para debugging
+          recordId: record.id
+        };
+        
+        errors.push(error);
+        result.errors.push(error);
+        
+        console.error(`[VALIDATION] ❌ CAMPO OBLIGATORIO VACÍO: ${field} = "${value}"`);
       } else {
         result.metadata.validatedFields++;
+        console.log(`[VALIDATION] ✅ Campo obligatorio válido: ${field} = "${value}"`);
       }
     });
+    
+    if (errors.length > 0) {
+      console.error(`[VALIDATION] ❌ TOTAL ERRORES DE CAMPOS OBLIGATORIOS: ${errors.length}`);
+      console.error('[VALIDATION] ❌ Detalles:', errors.map(e => `${e.field}: "${e.value}"`));
+    }
+    
+    return errors;
   }
 
   // 📏 VALIDAR FORMATOS ESPECÍFICOS
@@ -154,7 +168,7 @@ class ValidationService {
       });
     }
 
-    // Validar nombre de conductor (corregir errores de escritura)
+    // Validar nombre de conductor
     if (record.conductor_nombre) {
       const nameValidation = this.validateNombreConductor(record.conductor_nombre);
       if (!nameValidation.isValid) {
@@ -169,257 +183,49 @@ class ValidationService {
     }
 
     // Validar turno
-    if (record.turno && !['DIURNO', 'NOCTURNO'].includes(record.turno)) {
+    if (record.turno && !this.validateTurno(record.turno)) {
       result.warnings.push({
         field: 'turno',
-        type: 'INVALID_VALUE',
-        message: `Valor de turno no estándar: ${record.turno}`,
+        type: 'INVALID_TURNO',
+        message: `Turno no reconocido: ${record.turno}`,
         severity: 'WARNING',
-        expectedValues: ['DIURNO', 'NOCTURNO']
+        expectedValues: ['DIURNO', 'NOCTURNO', 'MAÑANA', 'TARDE', 'NOCHE']
       });
     }
   }
 
-  // 🧠 VALIDAR LÓGICA DE NEGOCIO  
+  // 🏢 VALIDAR LÓGICA DE NEGOCIO
   validateBusinessLogic(record, result) {
-    // Validar coherencia en fatiga del conductor
-    if (record.consumo_medicamentos === true) {
-      // Si consume medicamentos, debería no estar apto
-      if (record.condiciones_aptas === true) {
-        result.warnings.push({
-          field: 'condiciones_aptas',
-          type: 'LOGIC_INCONSISTENCY',
-          message: 'Conductor consume medicamentos pero se declara apto para conducir',
-          severity: 'WARNING',
-          recommendation: 'Verificar evaluación médica'
-        });
-      }
+    // Validar coherencia de datos
+    if (record.kilometraje && record.kilometraje < 0) {
+      result.errors.push({
+        field: 'kilometraje',
+        type: 'INVALID_VALUE',
+        message: 'El kilometraje no puede ser negativo',
+        severity: 'ERROR'
+      });
     }
 
-    // Validar correlación entre problemas de fatiga
-    const fatigueProblems = this.countFatigueProblems(record);
-    if (fatigueProblems >= 2) {
+    // Validar que el kilometraje sea razonable
+    if (record.kilometraje && record.kilometraje > 999999) {
       result.warnings.push({
-        field: 'fatigue_correlation', 
-        type: 'HIGH_FATIGUE_RISK',
-        message: `${fatigueProblems} problemas de fatiga detectados`,
-        severity: 'WARNING',
-        recommendation: 'Considerar suspensión temporal'
+        field: 'kilometraje',
+        type: 'SUSPICIOUS_VALUE',
+        message: 'Kilometraje muy alto, verificar',
+        severity: 'WARNING'
       });
     }
-
-    // Validar fecha futura
-    if (record.fecha) {
-      const recordDate = new Date(record.fecha);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      if (recordDate > today) {
-        result.warnings.push({
-          field: 'fecha',
-          type: 'FUTURE_DATE',
-          message: 'Fecha de inspección es futura',
-          severity: 'WARNING'
-        });
-      }
-    }
-  }
-
-  // 🚨 CALCULAR NIVEL DE RIESGO (actualizado según análisis)
-  calculateRiskLevel(record) {
-    let riskScore = 0;
-    let criticalFlags = 0;
-
-    // CRÍTICO: Consumo de medicamentos (peso máximo)
-    if (record.consumo_medicamentos === true) {
-      return 'CRÍTICO'; // Retorno inmediato - es crítico
-    }
-
-    // ALTO: Problemas múltiples de fatiga
-    let fatigueIssues = 0;
-    if (record.horas_sueno_suficientes === false) fatigueIssues++;
-    if (record.libre_sintomas_fatiga === false) fatigueIssues++;
-    if (record.condiciones_aptas === false) fatigueIssues++;
-    
-    if (fatigueIssues >= this.config.thresholds.fatigueProblemsForHigh) {
-      riskScore += this.config.riskWeights.fatiga * fatigueIssues;
-      criticalFlags++;
-    }
-    
-    // MEDIO: Problemas en vehículo
-    let vehicleIssues = 0;
-    if (record.frenos_funcionando === false) vehicleIssues++;
-    if (record.cinturones_seguros === false) vehicleIssues++;
-    if (record.luces_funcionando === false) vehicleIssues++;
-    if (record.extintor_vigente === false) vehicleIssues++;
-    if (record.botiquin_completo === false) vehicleIssues++;
-    
-    if (vehicleIssues >= this.config.thresholds.vehicleProblemsForMedium) {
-      riskScore += this.config.riskWeights.vehiculo * vehicleIssues;
-    }
-
-    // Estados deficientes en componentes
-    if (record.neumaticos_estado === 'MALO') riskScore += 10;
-    if (record.espejos_estado === 'MALO') riskScore += 8;
-
-    // Determinar nivel final
-    if (criticalFlags >= 1 || riskScore >= 50) {
-      return 'ALTO';
-    } else if (vehicleIssues >= 2 || riskScore >= 20) {
-      return 'MEDIO';  
-    }
-    
-    return 'BAJO';
-  }
-
-  // 🏆 CALCULAR PUNTAJE DE INSPECCIÓN (mejorado)
-  calculateInspectionScore(record) {
-    let score = 100; // Comenzar con puntaje perfecto
-    
-    // Penalizaciones críticas por fatiga del conductor
-    if (record.consumo_medicamentos === true) {
-      score -= this.config.riskWeights.medicamentos; // -50 puntos
-    }
-    
-    if (record.horas_sueno_suficientes === false) {
-      score -= this.config.riskWeights.fatiga; // -15 puntos
-    }
-    
-    if (record.libre_sintomas_fatiga === false) {
-      score -= this.config.riskWeights.fatiga; // -15 puntos
-    }
-    
-    if (record.condiciones_aptas === false) {
-      score -= 20; // Penalización alta
-    }
-    
-    // Penalizaciones por estado del vehículo
-    if (record.frenos_funcionando === false) {
-      score -= 15; // Crítico para seguridad
-    }
-    
-    if (record.cinturones_seguros === false) {
-      score -= 12; // Muy importante
-    }
-    
-    if (record.luces_funcionando === false) {
-      score -= this.config.riskWeights.vehiculo; // -10 puntos
-    }
-    
-    if (record.extintor_vigente === false) {
-      score -= this.config.riskWeights.mantenimiento; // -5 puntos
-    }
-    
-    if (record.botiquin_completo === false) {
-      score -= this.config.riskWeights.mantenimiento; // -5 puntos
-    }
-    
-    // Estados deficientes en componentes
-    if (record.neumaticos_estado === 'MALO') score -= 12;
-    if (record.neumaticos_estado === 'REGULAR') score -= 6;
-    
-    if (record.espejos_estado === 'MALO') score -= 8;
-    if (record.espejos_estado === 'REGULAR') score -= 4;
-    
-    // Bonus por inspección completa
-    const completedFields = this.countCompletedFields(record);
-    const totalFields = this.requiredFields.length + this.fatigueFields.length + this.vehicleFields.length;
-    const completionBonus = Math.floor((completedFields / totalFields) * 5);
-    score += completionBonus;
-    
-    // Retornar puntaje en rango válido
-    return Math.max(0, Math.min(100, Math.round(score)));
-  }
-
-  // 🚨 DETECTAR ALERTAS CRÍTICAS
-  detectCriticalAlerts(record) {
-    const alerts = [];
-    
-    // CRÍTICO: Medicamentos
-    if (record.consumo_medicamentos === true) {
-      alerts.push({
-        id: `medicamentos_${Date.now()}`,
-        type: 'MEDICAMENTOS_CRITICO',
-        level: 'CRÍTICO',
-        title: '🚨 SUSPENSIÓN INMEDIATA REQUERIDA',
-        message: 'Conductor ha consumido medicamentos que afectan su capacidad de conducción',
-        conductor: record.conductor_nombre,
-        placa: record.placa_vehiculo,
-        fecha: record.fecha,
-        actions: [
-          'SUSPENDER_CONDUCCION_INMEDIATAMENTE',
-          'NOTIFICAR_SUPERVISOR',
-          'EVALUAR_MEDICAMENTE',
-          'DOCUMENTAR_INCIDENTE'
-        ],
-        priority: 1,
-        autoGenerated: true
-      });
-    }
-
-    // ALTO: Fatiga múltiple
-    const fatigueProblems = this.countFatigueProblems(record);
-    if (fatigueProblems >= 2) {
-      alerts.push({
-        id: `fatiga_${Date.now()}`,
-        type: 'FATIGA_MULTIPLE',
-        level: 'ALTO',
-        title: '⚠️ MÚLTIPLES PROBLEMAS DE FATIGA',
-        message: `${fatigueProblems} indicadores de fatiga detectados`,
-        conductor: record.conductor_nombre,
-        details: {
-          suenoInsuficiente: !record.horas_sueno_suficientes,
-          conSintomas: !record.libre_sintomas_fatiga,
-          noApto: !record.condiciones_aptas
-        },
-        actions: [
-          'EVALUAR_ESTADO_CONDUCTOR',
-          'CONSIDERAR_DESCANSO_ADICIONAL',
-          'MONITORED_SUPERVISION'
-        ],
-        priority: 2
-      });
-    }
-
-    // MEDIO: Problemas vehiculares críticos
-    const criticalVehicleIssues = [
-      !record.frenos_funcionando,
-      !record.cinturones_seguros
-    ].filter(Boolean).length;
-
-    if (criticalVehicleIssues >= 1) {
-      alerts.push({
-        id: `vehiculo_${Date.now()}`,
-        type: 'VEHICULO_INSEGURO',
-        level: 'MEDIO',
-        title: '🔧 VEHÍCULO NO APTO PARA OPERACIÓN',
-        message: 'Problemas críticos de seguridad en vehículo',
-        placa: record.placa_vehiculo,
-        details: {
-          frenos: !record.frenos_funcionando,
-          cinturones: !record.cinturones_seguros
-        },
-        actions: [
-          'REPARAR_ANTES_DE_USO',
-          'INSPECCIONAR_MECANICAMENTE',
-          'ACTUALIZAR_MANTENIMIENTO'
-        ],
-        priority: 3
-      });
-    }
-
-    return alerts;
   }
 
   // 🔍 VALIDACIONES ESPECÍFICAS DE FORMATO
 
   validatePlacaVehiculo(placa) {
-    if (!placa) return false;
+    if (!placa || typeof placa !== 'string') return false;
     
     // Limpiar la placa
     const placaLimpia = placa.replace(/\s+/g, '').replace(/-+/g, '').toUpperCase();
     
-    // Patrones de placas colombianas (actualizados)
+    // Patrones de placas colombianas
     const patrones = [
       /^[A-Z]{3}[0-9]{3}$/,     // ABC123 (más común)
       /^[A-Z]{2}[0-9]{4}$/,     // AB1234 (motocicletas) 
@@ -436,7 +242,7 @@ class ValidationService {
       if (/([A-Z0-9])\1{3,}/.test(placaLimpia)) return false;
       
       // No debe ser una placa obviamente falsa
-      const fakePlates = ['AAA000', 'ABC000', '000000', 'TEST01'];
+      const fakePlates = ['AAA000', 'ABC000', '000000', 'TEST01', 'XXXX00'];
       if (fakePlates.includes(placaLimpia)) return false;
     }
     
@@ -459,158 +265,199 @@ class ValidationService {
 
   validateNombreConductor(nombre) {
     if (!nombre || typeof nombre !== 'string') {
-      return {
-        isValid: false,
-        message: 'Nombre requerido'
+      return { isValid: false, message: 'Nombre es requerido' };
+    }
+    
+    const nombreLimpio = nombre.trim();
+    
+    // Debe tener al menos 2 caracteres
+    if (nombreLimpio.length < 2) {
+      return { 
+        isValid: false, 
+        message: 'Nombre muy corto (mínimo 2 caracteres)' 
       };
     }
-
-    const trimmedNombre = nombre.trim();
-    const result = {
-      isValid: true,
-      message: '',
-      suggestions: []
-    };
-
-    // Validaciones básicas
-    if (trimmedNombre.length < 3) {
-      result.isValid = false;
-      result.message = 'Nombre muy corto (mínimo 3 caracteres)';
-      return result;
+    
+    // No debe tener solo números
+    if (/^\d+$/.test(nombreLimpio)) {
+      return { 
+        isValid: false, 
+        message: 'Nombre no puede ser solo números' 
+      };
     }
-
-    if (trimmedNombre.length > 100) {
-      result.isValid = false; 
-      result.message = 'Nombre muy largo (máximo 100 caracteres)';
-      return result;
+    
+    // No debe tener caracteres especiales extraños
+    if (/[<>{}[\]\\|`~!@#$%^&*()+=]/.test(nombreLimpio)) {
+      return { 
+        isValid: false, 
+        message: 'Nombre contiene caracteres no permitidos',
+        suggestions: ['Remover caracteres especiales'] 
+      };
     }
+    
+    return { isValid: true };
+  }
 
-    // Detectar errores comunes de escritura
-    const commonErrors = [
-      { error: /\s{2,}/, suggestion: 'Eliminar espacios dobles' },
-      { error: /[0-9]/, suggestion: 'Remover números del nombre' },
-      { error: /[^a-zA-ZáéíóúÁÉÍÓÚñÑ\s]/, suggestion: 'Remover caracteres especiales' }
+  validateTurno(turno) {
+    if (!turno || typeof turno !== 'string') return false;
+    
+    const turnoNormalizado = turno.trim().toUpperCase();
+    const turnosValidos = [
+      'DIURNO', 'NOCTURNO', 
+      'MAÑANA', 'TARDE', 'NOCHE',
+      'DIA', 'NOCHE',
+      'TURNO 1', 'TURNO 2', 'TURNO 3',
+      'A', 'B', 'C' // Turnos por letra
     ];
-
-    commonErrors.forEach(({ error, suggestion }) => {
-      if (error.test(trimmedNombre)) {
-        result.isValid = false;
-        result.suggestions.push(suggestion);
-      }
-    });
-
-    if (!result.isValid) {
-      result.message = 'Formato de nombre incorrecto';
-    }
-
-    return result;
+    
+    return turnosValidos.includes(turnoNormalizado) ||
+           turnosValidos.some(t => turnoNormalizado.includes(t));
   }
 
-  // 🔢 MÉTODOS AUXILIARES
+  // 🎯 CALCULAR NIVEL DE RIESGO
+  calculateRiskLevel(record) {
+    let riskScore = 0;
+    
+    // Factores de riesgo de fatiga
+    if (!record.horas_sueno || record.horas_sueno === false) riskScore += 15;
+    if (!record.libre_fatiga || record.libre_fatiga === false) riskScore += 15;
+    
+    // Factores de riesgo vehicular
+    if (!record.frenos || record.frenos === false) riskScore += 20;
+    if (!record.cinturones || record.cinturones === false) riskScore += 10;
+    if (!record.direccionales || record.direccionales === false) riskScore += 5;
+    
+    // Determinar nivel
+    if (riskScore >= 30) return 'ALTO';
+    if (riskScore >= 15) return 'MEDIO';
+    return 'BAJO';
+  }
 
-  countFatigueProblems(record) {
-    return [
-      record.horas_sueno_suficientes === false,
-      record.libre_sintomas_fatiga === false,
-      record.condiciones_aptas === false
+  // 📊 CALCULAR PUNTAJE DE INSPECCIÓN
+  calculateInspectionScore(record) {
+    const totalFields = [
+      'frenos', 'cinturones', 'espejos', 'direccionales',
+      'baterias', 'aceite_motor', 'fluido_frenos', 'documentacion'
+    ];
+    
+    let positiveFields = 0;
+    totalFields.forEach(field => {
+      if (record[field] === true) positiveFields++;
+    });
+    
+    return Math.round((positiveFields / totalFields.length) * 100);
+  }
+
+  // 🚨 DETECTAR ALERTAS CRÍTICAS
+  detectCriticalAlerts(record) {
+    const alerts = [];
+    
+    // Alerta por problemas críticos de fatiga
+    const fatigueProblems = [
+      !record.horas_sueno,
+      !record.libre_fatiga
     ].filter(Boolean).length;
+
+    if (fatigueProblems >= 1) {
+      alerts.push({
+        id: `fatiga_${Date.now()}`,
+        type: 'FATIGA_CRITICA',
+        level: 'ALTO',
+        title: '😴 CONDUCTOR EN RIESGO DE FATIGA',
+        message: 'Problemas críticos de descanso detectados',
+        conductor: record.conductor_nombre,
+        placa: record.placa_vehiculo,
+        details: {
+          horasSueno: record.horas_sueno,
+          libreFatiga: record.libre_fatiga
+        },
+        actions: [
+          'EVALUAR_CONDICION_MEDICA',
+          'SUSPENDER_OPERACION',
+          'REPORTE_A_SUPERVISION'
+        ],
+        priority: 1
+      });
+    }
+
+    // Alerta por vehículo inseguro
+    const criticalVehicleIssues = [
+      !record.frenos,
+      !record.cinturones
+    ].filter(Boolean).length;
+
+    if (criticalVehicleIssues >= 1) {
+      alerts.push({
+        id: `vehiculo_${Date.now()}`,
+        type: 'VEHICULO_INSEGURO',
+        level: 'MEDIO',
+        title: '🔧 VEHÍCULO NO APTO PARA OPERACIÓN',
+        message: 'Problemas críticos de seguridad en vehículo',
+        placa: record.placa_vehiculo,
+        details: {
+          frenos: record.frenos,
+          cinturones: record.cinturones
+        },
+        actions: [
+          'REPARAR_ANTES_DE_USO',
+          'INSPECCIONAR_MECANICAMENTE',
+          'ACTUALIZAR_MANTENIMIENTO'
+        ],
+        priority: 3
+      });
+    }
+
+    return alerts;
   }
 
-  countCompletedFields(record) {
-    const allFields = [...this.requiredFields, ...this.fatigueFields, ...this.vehicleFields];
-    return allFields.filter(field => 
-      record[field] !== null && 
-      record[field] !== undefined && 
-      record[field] !== ''
-    ).length;
-  }
-
-  // 📊 GENERAR REPORTE DE VALIDACIÓN
-  generateValidationReport(results) {
-    const total = results.length;
-    const valid = results.filter(r => r.isValid).length;
-    const withErrors = results.filter(r => r.errors.length > 0).length;
-    const withWarnings = results.filter(r => r.warnings.length > 0).length;
-    const criticalAlerts = results.reduce((sum, r) => sum + r.criticalAlerts.length, 0);
-
-    return {
-      summary: {
-        totalRecords: total,
-        validRecords: valid,
-        invalidRecords: withErrors,
-        recordsWithWarnings: withWarnings,
-        successRate: total > 0 ? Math.round((valid / total) * 100) : 0
-      },
-      alerts: {
-        critical: criticalAlerts,
-        riskDistribution: this.calculateRiskDistribution(results)
-      },
-      topErrors: this.getTopErrors(results),
-      recommendations: this.generateRecommendations(results)
+  // 🔍 VALIDAR LOTE DE REGISTROS
+  validateBatch(records) {
+    console.log(`[VALIDATION] 🔍 Validando lote de ${records.length} registros...`);
+    
+    const results = {
+      validRecords: [],
+      invalidRecords: [],
+      totalErrors: 0,
+      totalWarnings: 0,
+      criticalAlerts: [],
+      summary: {}
     };
-  }
-
-  calculateRiskDistribution(results) {
-    return results.reduce((dist, result) => {
-      const level = result.riskLevel || 'BAJO';
-      dist[level] = (dist[level] || 0) + 1;
-      return dist;
-    }, {});
-  }
-
-  getTopErrors(results) {
-    const errorMap = new Map();
     
-    results.forEach(result => {
-      result.errors.forEach(error => {
-        const key = `${error.type}:${error.field}`;
-        errorMap.set(key, (errorMap.get(key) || 0) + 1);
-      });
+    records.forEach((record, index) => {
+      const validation = this.validateRecord(record);
+      
+      if (validation.isValid) {
+        results.validRecords.push({
+          record: record,
+          validation: validation
+        });
+      } else {
+        results.invalidRecords.push({
+          record: record,
+          validation: validation,
+          index: index
+        });
+      }
+      
+      results.totalErrors += validation.errors.length;
+      results.totalWarnings += validation.warnings.length;
+      results.criticalAlerts.push(...validation.criticalAlerts);
     });
-
-    return Array.from(errorMap.entries())
-      .map(([key, count]) => ({ error: key, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-  }
-
-  generateRecommendations(results) {
-    const recommendations = [];
     
-    const criticalCount = results.filter(r => 
-      r.criticalAlerts.some(a => a.level === 'CRÍTICO')
-    ).length;
+    results.summary = {
+      totalRecords: records.length,
+      validRecords: results.validRecords.length,
+      invalidRecords: results.invalidRecords.length,
+      successRate: Math.round((results.validRecords.length / records.length) * 100),
+      totalErrors: results.totalErrors,
+      totalWarnings: results.totalWarnings,
+      criticalAlerts: results.criticalAlerts.length
+    };
     
-    if (criticalCount > 0) {
-      recommendations.push({
-        priority: 'ALTA',
-        message: `${criticalCount} conductores requieren suspensión inmediata por medicamentos`,
-        action: 'REVISAR_ALERTAS_CRITICAS'
-      });
-    }
-
-    const highRiskCount = results.filter(r => r.riskLevel === 'ALTO').length;
-    if (highRiskCount > results.length * 0.1) {
-      recommendations.push({
-        priority: 'MEDIA',
-        message: `${highRiskCount} registros de alto riesgo detectados`,
-        action: 'IMPLEMENTAR_PROGRAMA_FATIGA'
-      });
-    }
-
-    return recommendations;
+    console.log(`[VALIDATION] ✅ Validación de lote completada:`, results.summary);
+    
+    return results;
   }
 }
 
-// Exporta la clase y la función de validación directa
-const validationInstance = new ValidationService();
-
-function validateInspectionRecord(record) {
-  // Permite uso async/await aunque el método no sea async
-  return Promise.resolve(validationInstance.validateRecord(record));
-}
-
-module.exports = {
-  ValidationService,
-  validateInspectionRecord
-};
+module.exports = ValidationService;

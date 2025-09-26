@@ -109,7 +109,7 @@ class UploadService {
         formData.append('batchSize', options.batchSize.toString());
       }
       
-      const response = await apiClient.post<ApiResponse<UploadResult>>('/upload/excel', formData, {
+  const response = await apiClient.post<ApiResponse<UploadResult>>('/upload/process', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

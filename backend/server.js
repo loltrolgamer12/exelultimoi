@@ -1,246 +1,312 @@
-// 🚀 SERVIDOR PRINCIPAL - SISTEMA HQ-FO-40 V2.0
-// server.js
+// 📄 ARCHIVO: backend/server.js
+// 🔧 Servidor principal corregido
 
 const express = require('express');
+const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
-
-// 📁 Importaciones internas
-const corsConfig = require('./src/config/cors');
-const { connectDatabase, disconnectDatabase } = require('./src/config/database');
-const { errorHandler } = require('./src/middleware/errorHandler');
-
-// 📍 Rutas
-const uploadRoutes = require('./src/routes/upload');
-const searchRoutes = require('./src/routes/search');
-const dashboardRoutes = require('./src/routes/dashboard');
-
-// 🔧 Configuración de entorno
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// 🛡️ Middleware de seguridad
-app.use(helmet({
-  crossOriginResourcePolicy: false, // Permitir recursos de diferentes orígenes
-  contentSecurityPolicy: false     // Desactivar CSP para permitir uploads
-}));
+// 🔧 **CONFIGURACIÓN DE CORS**
+console.log('[CORS] Configurando CORS...');
+console.log('[CORS] NODE_ENV:', process.env.NODE_ENV);
+console.log('[CORS] FRONTEND_URL:', process.env.FRONTEND_URL);
 
-// 📦 Middleware de compresión para archivos grandes
-app.use(compression({
-  filter: (req, res) => {
-    if (req.headers['x-no-compression']) {
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'https://v0-vehicle-inspection-system.vercel.app',
+  'https://sistema-hq-fo-40.vercel.app',
+  /^https:\/\/.*\.v0\.dev$/,
+  /^https:\/\/.*\.vercel\.app$/,
+  /^http:\/\/localhost:\d+$/
+];
+
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
+if (process.env.ADDITIONAL_ORIGINS) {
+  const additionalOrigins = process.env.ADDITIONAL_ORIGINS.split(',');
+  allowedOrigins.push(...additionalOrigins);
+}
+
+console.log('[CORS] Orígenes permitidos:', allowedOrigins);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (typeof allowedOrigin === 'string') {
+        return allowedOrigin === origin;
+      } else if (allowedOrigin instanceof RegExp) {
+        return allowedOrigin.test(origin);
+      }
       return false;
+    });
+
+    if (isAllowed) {
+      console.log('[CORS] ✅ Origen permitido:', origin);
+      callback(null, true);
+    } else {
+      console.log('[CORS] ❌ Origen bloqueado:', origin);
+      callback(new Error('Not allowed by CORS'));
     }
-    return compression.filter(req, res);
   },
-  threshold: 1024, // Solo comprimir archivos > 1KB
-  level: 6         // Nivel de compresión balanceado
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// 🌐 CORS con configuración avanzada
-app.use(corsConfig);
+// 🔧 **MIDDLEWARE DE SEGURIDAD**
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: false
+}));
 
-// 📊 Rate limiting más permisivo para archivos grandes
-const limiter = rateLimit({
+app.use(compression());
+
+// Activar trust proxy para X-Forwarded-For y rate-limit
+app.set('trust proxy', true);
+
+// 📊 **RATE LIMITING GLOBAL**
+const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: process.env.NODE_ENV === 'production' ? 100 : 1000, // Más requests en desarrollo
+  max: 1000, // Límite por IP
   message: {
-    error: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiadas solicitudes. Intente nuevamente en 15 minutos.',
-    retryAfter: 15 * 60
+    success: false,
+    error: 'RATE_LIMIT',
+    message: 'Demasiadas solicitudes desde esta IP'
   },
   standardHeaders: true,
-  legacyHeaders: false,
-  // Excluir health check del rate limiting
-  skip: (req) => req.path === '/api/health'
+  legacyHeaders: false
 });
 
-app.use('/api/', limiter);
+app.use(globalLimiter);
 
-// 📥 Parser de JSON con límite aumentado para archivos grandes
+// 🔧 **CONFIGURACIÓN DE PARSERS**
 app.use(express.json({ 
-  limit: '50mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
+  limit: '10mb',
+  type: ['application/json', 'text/plain']
 }));
 
 app.use(express.urlencoded({ 
   extended: true, 
-  limit: '50mb',
-  parameterLimit: 50000
+  limit: '10mb'
 }));
 
-// 📝 Logging de requests en desarrollo
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    if (req.method === 'POST' && req.body) {
-      console.log('Body keys:', Object.keys(req.body));
-    }
-    next();
-  });
+// 🔧 **CONFIGURACIÓN DE BASE DE DATOS**
+console.log('[DB] Creando cliente Prisma...');
+const { getPrismaClient } = require('./src/config/database');
+
+try {
+  const prisma = getPrismaClient();
+  console.log('[DB] ✅ Cliente Prisma configurado correctamente');
+  
+  // Test de conexión
+  prisma.$connect()
+    .then(() => console.log('[DB] ✅ Conexión a base de datos establecida'))
+    .catch(err => console.error('[DB] ❌ Error conectando a BD:', err.message));
+} catch (error) {
+  console.error('[DB] ❌ Error configurando Prisma:', error.message);
 }
 
-// 🏥 Health Check mejorado
-app.get('/api/health', async (req, res) => {
-  try {
-    const startTime = Date.now();
-    
-    // Verificar conexión a base de datos
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    
-    await prisma.$queryRaw`SELECT 1`;
-    const dbResponseTime = Date.now() - startTime;
-    
-    await prisma.$disconnect();
-    
-    res.status(200).json({
-      status: 'OK',
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV || 'development',
-      database: {
-        status: 'connected',
-        responseTime: `${dbResponseTime}ms`
-      },
-      server: {
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        version: process.version
-      },
-      api: {
-        version: '2.0.0',
-        name: 'Sistema HQ-FO-40'
-      }
-    });
-  } catch (error) {
-    console.error('[HEALTH-CHECK] Error:', error);
-    res.status(503).json({
-      status: 'ERROR',
-      message: 'Service unavailable',
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
+// 📊 **MIDDLEWARE DE LOGGING**
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - IP: ${req.ip}`);
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+  });
+  
+  next();
 });
 
-// 📊 Endpoint de información del sistema
-app.get('/api/info', (req, res) => {
+// 🛣️ **CONFIGURACIÓN DE RUTAS**
+
+// Ruta de salud
+app.get('/health', (req, res) => {
   res.json({
-    name: 'Sistema HQ-FO-40 API',
-    version: '2.0.0',
-    description: 'Sistema de Inspecciones Vehiculares con Detección de Fatiga',
-    features: {
-      excel_processing: 'Archivos anuales completos',
-      fatigue_detection: 'Detección avanzada de fatiga del conductor',
-      duplicate_validation: 'Validación inteligente de duplicados',
-      real_time_alerts: 'Alertas rojas y advertencias en tiempo real'
-    },
-    endpoints: {
-      health: '/api/health',
-      upload: '/api/upload',
-      search: '/api/search',
-      dashboard: '/api/dashboard'
-    },
-    new_features_v2: {
-      fatigue_questions: [
-        '¿Ha consumido medicamentos o sustancias que afecten su estado de alerta?',
-        '¿Ha dormido al menos 7 horas en las últimas 24 horas?',
-        '¿Se encuentra libre de síntomas de fatiga?',
-        '¿Se siente en condiciones físicas y mentales para conducir?'
-      ],
-      alert_levels: {
-        red_alert: 'Consumo de medicamentos/sustancias',
-        warnings: 'Problemas de sueño, fatiga o aptitud'
-      }
-    }
+    success: true,
+    message: 'Servidor funcionando correctamente',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    uptime: process.uptime()
   });
 });
 
-// 📍 Registro de rutas principales
-app.use('/api/upload', uploadRoutes);
-app.use('/api/search', searchRoutes);  
-app.use('/api/dashboard', dashboardRoutes);
+// Rutas principales
+try {
+  console.log('[ROUTES] Configurando rutas...');
+  
+  // 📤 Rutas de upload
+  const uploadRoutes = require('./src/routes/upload');
+  app.use('/api/upload', uploadRoutes);
+  console.log('[ROUTES] ✅ Rutas de upload configuradas: /api/upload');
+  
+  // 🔍 Otras rutas (agregar según necesidad)
+  // const inspectionRoutes = require('./src/routes/inspections');
+  // app.use('/api/inspections', inspectionRoutes);
+  
+  // 📊 Ruta de información de API
+  app.get('/api', (req, res) => {
+    res.json({
+      success: true,
+      message: 'API del Sistema de Inspecciones Vehiculares HQ-FO-40',
+      version: '2.0.0',
+      endpoints: {
+        upload: '/api/upload',
+        health: '/health'
+      },
+      documentation: 'https://docs.example.com', // TODO: Agregar documentación real
+      timestamp: new Date().toISOString()
+    });
+  });
+  
+  // Rutas de dashboard (widgets y kpis)
+  app.get('/api/dashboard/widgets', (req, res) => {
+    res.json({ widgets: [] }); // Devuelve tu lógica real aquí
+  });
 
-// 🔍 Ruta de fallback para rutas no encontradas
-app.use('/api/*', (req, res) => {
+  app.get('/api/dashboard/kpis', (req, res) => {
+    res.json({ kpis: [] }); // Devuelve tu lógica real aquí
+  });
+  
+} catch (error) {
+  console.error('[ROUTES] ❌ Error configurando rutas:', error);
+  process.exit(1);
+}
+
+// 🔧 **MIDDLEWARE DE MANEJO DE ERRORES GLOBAL**
+app.use((error, req, res, next) => {
+  console.error('[SERVER] ❌ Error no manejado:', error);
+  
+  // Error de CORS
+  if (error.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      success: false,
+      error: 'CORS_ERROR',
+      message: 'Origen no permitido por política CORS'
+    });
+  }
+  
+  // Error de parsing JSON
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_JSON',
+      message: 'JSON mal formado en el cuerpo de la solicitud'
+    });
+  }
+  
+  // Error genérico
+  const statusCode = error.status || error.statusCode || 500;
+  const errorResponse = {
+    success: false,
+    error: 'SERVER_ERROR',
+    message: error.message || 'Error interno del servidor',
+    timestamp: new Date().toISOString()
+  };
+  
+  // En desarrollo, incluir stack trace
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = error.stack;
+  }
+  
+  res.status(statusCode).json(errorResponse);
+});
+
+// 🔧 **MANEJO DE RUTAS NO ENCONTRADAS**
+app.use((req, res) => {
+  console.log(`[SERVER] ❌ Ruta no encontrada: ${req.method} ${req.path}`);
   res.status(404).json({
-    error: 'ENDPOINT_NOT_FOUND',
-    message: `Endpoint ${req.originalUrl} no encontrado`,
+    success: false,
+    error: 'NOT_FOUND',
+    message: `Ruta ${req.method} ${req.path} no encontrada`,
     availableEndpoints: [
-      '/api/health',
-      '/api/info',
-      '/api/upload/excel',
-      '/api/search/inspections',
-      '/api/dashboard/stats'
+      'GET /health',
+      'GET /api',
+      'POST /api/upload/validate',
+      'POST /api/upload/process',
+      'GET /api/upload/history',
+      'GET /api/upload/stats'
     ]
   });
 });
 
-// ⚠️ Middleware de manejo de errores (debe ir al final)
-app.use(errorHandler);
+// 🚀 **INICIO DEL SERVIDOR**
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log('\n🚀 =====================================');
+  console.log(`🚀 Servidor iniciado exitosamente`);
+  console.log(`🚀 Puerto: ${PORT}`);
+  console.log(`🚀 Entorno: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Tiempo: ${new Date().toLocaleString()}`);
+  console.log('🚀 =====================================\n');
+  
+  console.log('📋 Endpoints disponibles:');
+  console.log(`   ✅ Health Check: http://localhost:${PORT}/health`);
+  console.log(`   ✅ API Info: http://localhost:${PORT}/api`);
+  console.log(`   📤 Upload Validate: http://localhost:${PORT}/api/upload/validate`);
+  console.log(`   📤 Upload Process: http://localhost:${PORT}/api/upload/process`);
+  console.log(`   📊 Upload History: http://localhost:${PORT}/api/upload/history`);
+  console.log(`   📊 Upload Stats: http://localhost:${PORT}/api/upload/stats\n`);
+});
 
-// 🚀 Inicialización del servidor
-async function startServer() {
-  try {
-    // Conectar a la base de datos
-    console.log('🔗 Conectando a la base de datos...');
-    await connectDatabase();
-    console.log('✅ Base de datos conectada exitosamente');
+// 🔧 **MANEJO DE CIERRE GRACEFUL**
+process.on('SIGTERM', async () => {
+  console.log('\n[SERVER] 🔄 Recibida señal SIGTERM, cerrando servidor...');
+  
+  server.close(async () => {
+    console.log('[SERVER] ✅ Servidor HTTP cerrado');
     
-    // Iniciar servidor
-    const server = app.listen(PORT, () => {
-      console.log('🚀 ==========================================');
-      console.log(`🚀 SISTEMA HQ-FO-40 V2.0 INICIADO`);
-      console.log(`🚀 Puerto: ${PORT}`);
-      console.log(`🚀 Entorno: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🚀 API URL: http://localhost:${PORT}/api`);
-      console.log(`🚀 Health Check: http://localhost:${PORT}/api/health`);
-      console.log('🚀 ==========================================');
-    });
+    try {
+      const prisma = getPrismaClient();
+      await prisma.$disconnect();
+      console.log('[DB] ✅ Conexión a BD cerrada');
+    } catch (error) {
+      console.error('[DB] ❌ Error cerrando conexión:', error);
+    }
     
-    // 🛑 Graceful shutdown
-    const gracefulShutdown = async (signal) => {
-      console.log(`\n⚠️  Señal ${signal} recibida. Iniciando cierre graceful...`);
-      
-      server.close(async () => {
-        console.log('🔌 Servidor HTTP cerrado');
-        
-        try {
-          await disconnectDatabase();
-          console.log('🔗 Base de datos desconectada');
-        } catch (error) {
-          console.error('❌ Error al cerrar la base de datos:', error);
-        }
-        
-        console.log('✅ Cierre graceful completado');
-        process.exit(0);
-      });
-      
-      // Forzar cierre después de 10 segundos
-      setTimeout(() => {
-        console.error('❌ Forzando cierre del proceso...');
-        process.exit(1);
-      }, 10000);
-    };
-    
-    // Escuchar señales de cierre
-    process.on('SIGTERM', gracefulShutdown);
-    process.on('SIGINT', gracefulShutdown);
-    
-  } catch (error) {
-    console.error('❌ Error al iniciar el servidor:', error);
-    process.exit(1);
-  }
-}
+    console.log('[SERVER] 👋 Proceso terminado correctamente');
+    process.exit(0);
+  });
+});
 
-// Solo iniciar el servidor si este archivo se ejecuta directamente
-if (require.main === module) {
-  startServer();
-}
+process.on('SIGINT', async () => {
+  console.log('\n[SERVER] 🔄 Recibida señal SIGINT (Ctrl+C), cerrando servidor...');
+  
+  server.close(async () => {
+    try {
+      const prisma = getPrismaClient();
+      await prisma.$disconnect();
+      console.log('[DB] ✅ Conexión a BD cerrada');
+    } catch (error) {
+      console.error('[DB] ❌ Error cerrando conexión:', error);
+    }
+    
+    console.log('[SERVER] 👋 Servidor cerrado correctamente');
+    process.exit(0);
+  });
+});
+
+// 🔧 **MANEJO DE ERRORES NO CAPTURADOS**
+process.on('uncaughtException', (error) => {
+  console.error('[SERVER] 💥 Excepción no capturada:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[SERVER] 💥 Promise rechazada no manejada:', reason);
+  console.error('[SERVER] 💥 En promise:', promise);
+  process.exit(1);
+});
 
 module.exports = app;

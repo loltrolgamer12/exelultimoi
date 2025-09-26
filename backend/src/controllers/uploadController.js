@@ -1,13 +1,16 @@
-// 🎛️ CONTROLADOR DE UPLOAD V2.0
-// src/controllers/uploadController.js
+// 🎛️ CONTROLADOR DE UPLOAD V2.0 CORREGIDO - COMPLETO
+// backend/src/controllers/uploadController.js
 
 const ExcelService = require('../services/excelService');
+const ValidationService = require('../services/validationService');
 const { successResponse, errorResponse } = require('../utils/responseUtils');
 const { getPrismaClient } = require('../config/database');
 
 class UploadController {
   constructor() {
     this.prisma = getPrismaClient();
+    this.excelService = new ExcelService();
+    this.validationService = new ValidationService();
   }
 
   // 🔍 Validar archivo Excel antes de procesarlo
@@ -19,11 +22,10 @@ class UploadController {
         return errorResponse(res, 'ARCHIVO_REQUERIDO', 'Debe seleccionar un archivo Excel', 400);
       }
       
-      // Validaciones básicas del archivo
       const file = req.file;
       const maxSize = parseInt(process.env.MAX_FILE_SIZE) || 50 * 1024 * 1024; // 50MB default
       
-      console.log(`[UPLOAD] 📊 Archivo recibido: ${file.originalname} (${file.size} bytes)`);
+      console.log(`[UPLOAD] 📊 Archivo recibido: ${file.originalname} (${Math.round(file.size / 1024)}KB)`);
       
       // Validar tamaño
       if (file.size > maxSize) {
@@ -37,32 +39,48 @@ class UploadController {
           'Solo se permiten archivos Excel (.xlsx, .xls)', 400);
       }
       
-      // Inicializar servicio Excel
-      const excelService = new ExcelService();
-      
       // Analizar estructura del archivo
-      const analysis = await excelService.analyzeExcelFile(file.buffer, file.originalname);
+      const analysis = await this.excelService.analyzeExcelFile(file.buffer, file.originalname);
+      
+      // ⚠️ VALIDACIÓN CRÍTICA: Verificar si el archivo es válido
+      if (!analysis.isValid) {
+        console.error('[UPLOAD] ❌ Archivo Excel inválido:', analysis.errors);
+        return errorResponse(res, 'ARCHIVO_INVALIDO', 
+          `Archivo Excel inválido: ${analysis.errors.join(', ')}`, 400);
+      }
       
       // Verificar si el archivo ya fue procesado
-      const existingFile = await excelService.checkDuplicateFile(analysis.fileHash);
+      const existingFile = await this.checkDuplicateFile(analysis.fileHash);
+      if (existingFile && !req.query.allowDuplicates) {
+        return errorResponse(res, 'ARCHIVO_DUPLICADO', 
+          `Este archivo ya fue procesado el ${new Date(existingFile.fecha_procesamiento).toLocaleString()}`, 409);
+      }
       
       const response = {
-        isValid: (analysis.warnings.length === 0 && (!analysis.errors || analysis.errors.length === 0)),
+        isValid: true,
         fileName: file.originalname,
         fileSize: file.size,
+        fileHash: analysis.fileHash,
         detectedYear: analysis.dateInfo?.año,
-        detectedMonths: analysis.dateInfo?.meses || [],
+        detectedMonths: analysis.dateInfo?.mesesNombres || [],
         estimatedRecords: analysis.totalRows,
+        columnMapping: {
+          found: Object.keys(analysis.columnMapping.found),
+          missing: analysis.columnMapping.missing,
+          missingRequired: analysis.columnMapping.missingRequired
+        },
         errors: analysis.errors || [],
         warnings: analysis.warnings || [],
-        recommendations: this.generateRecommendations(analysis)
+        recommendations: this.generateRecommendations(analysis),
+        isDuplicate: !!existingFile
       };
       
       console.log('[UPLOAD] ✅ Validación exitosa:', {
         filename: file.originalname,
         rows: analysis.totalRows,
         year: response.detectedYear,
-        months: response.detectedMonths
+        months: response.detectedMonths.length,
+        columnsFound: Object.keys(analysis.columnMapping.found).length
       });
       
       return successResponse(res, response, 'Archivo validado exitosamente');
@@ -75,6 +93,9 @@ class UploadController {
 
   // 🚀 Procesar y cargar archivo Excel
   async uploadExcel(req, res) {
+    const startTime = Date.now();
+    let transaction = null;
+    
     try {
       console.log('[UPLOAD] 🚀 Iniciando procesamiento de archivo Excel...');
       
@@ -86,358 +107,464 @@ class UploadController {
       const options = {
         forceReprocess: req.body.forceReprocess === 'true',
         skipValidation: req.body.skipValidation === 'true',
-        batchSize: parseInt(req.body.batchSize) || 500
+        batchSize: parseInt(req.body.batchSize) || 500,
+        allowInvalidRecords: false // ⚠️ CRÍTICO: No permitir registros inválidos
       };
       
       console.log(`[UPLOAD] 📊 Procesando archivo: ${file.originalname}`, options);
       
-      // Inicializar servicio Excel
-      const excelService = new ExcelService();
+      // 1. Procesar archivo Excel
+      const processingResult = await this.excelService.processExcelFile(file.buffer, file.originalname, options);
       
-      // Procesar archivo
-      const result = await excelService.processExcelFile(file.buffer, file.originalname, options);
+      if (!processingResult.success) {
+        throw new Error(`Error procesando Excel: ${processingResult.error}`);
+      }
       
-      // 📊 Generar estadísticas adicionales
-      const stats = await this.generateProcessingStats(result);
+      console.log(`[UPLOAD] 📊 Excel procesado: ${processingResult.totalRecords} registros`);
       
-      // 🚨 Generar alertas si hay problemas críticos
-      const alerts = await this.generateAlerts(result);
+      // 2. ⚠️ VALIDACIÓN CRÍTICA: Validar TODOS los registros
+      console.log('[UPLOAD] 🔍 Iniciando validación de registros...');
+      const batchValidation = this.validationService.validateBatch(processingResult.records);
+      
+        // Si hay registros inválidos, continuar y reportar en la respuesta
+        let errorDetails = [];
+        if (batchValidation.invalidRecords.length > 0) {
+          console.warn(`[UPLOAD] ⚠️ Se encontraron ${batchValidation.invalidRecords.length} registros inválidos, solo se insertarán los válidos.`);
+          errorDetails = batchValidation.invalidRecords.slice(0, 10).map(invalid => ({
+            fila: invalid.index + 1,
+            placa: invalid.record.placa_vehiculo,
+            errores: invalid.validation.errors.map(e => `${e.field}: ${e.message}`)
+          }));
+        }
+      
+      console.log(`[UPLOAD] ✅ Validación completada: ${batchValidation.validRecords.length} registros válidos`);
+      
+      // 3. Guardar registros válidos en la base de datos
+      const insertResult = await this.insertRecordsIntoDatabase(
+        batchValidation.validRecords.map(v => v.record),
+        processingResult.fileHash,
+        file.originalname,
+        options
+      );
+      
+      // 4. Guardar registro del archivo procesado
+      await this.saveProcessedFileRecord(file, processingResult, insertResult);
+      
+      // 5. Generar estadísticas y alertas
+      const stats = await this.generateProcessingStats(insertResult);
+      const alerts = await this.generateAlerts(batchValidation);
       
       const response = {
         success: true,
-        processing: result,
+        processing: {
+          totalRecords: processingResult.totalRecords,
+          validRecords: batchValidation.validRecords.length,
+          invalidRecords: batchValidation.invalidRecords.length,
+          insertedRecords: insertResult.insertedRecords,
+          duplicateRecords: insertResult.duplicateRecords,
+          processingTime: Date.now() - startTime
+        },
+        validation: {
+          successRate: batchValidation.summary.successRate,
+          totalErrors: batchValidation.totalErrors,
+          totalWarnings: batchValidation.totalWarnings,
+          criticalAlerts: batchValidation.criticalAlerts.length
+        },
+        database: {
+          newRecords: insertResult.insertedRecords,
+          duplicatesSkipped: insertResult.duplicateRecords,
+          errorsInserting: insertResult.errorRecords || 0
+        },
+        fileInfo: {
+          fileName: file.originalname,
+          fileSize: file.size,
+          fileHash: processingResult.fileHash,
+          detectedYear: processingResult.dateInfo?.año,
+          detectedMonths: processingResult.dateInfo?.mesesNombres || []
+        },
         statistics: stats,
         alerts: alerts,
-        summary: {
-          totalProcessed: result.totalRecords,
-          newRecords: result.newRecords,
-          duplicateRecords: result.duplicateRecords,
-          errorRecords: result.errorRecords,
-          processingTime: result.processingTime,
-          period: `${result.dateInfo.año} - ${result.dateInfo.meses.length} meses`,
-          criticalAlerts: alerts.filter(a => a.level === 'CRITICO').length,
-          warnings: alerts.filter(a => a.level === 'ADVERTENCIA').length
-        },
-        nextSteps: this.generateNextSteps(result, alerts)
+        nextSteps: this.generateNextSteps(insertResult, alerts)
       };
       
-      console.log('[UPLOAD] ✅ Procesamiento exitoso:', response.summary);
+      console.log('[UPLOAD] ✅ Procesamiento exitoso:', {
+        archivo: file.originalname,
+        totalRegistros: response.processing.totalRecords,
+        registrosInsertados: response.database.newRecords,
+        tiempoProcesamiento: response.processing.processingTime + 'ms'
+      });
       
-      // 📧 Notificación para casos críticos (futuro)
+      // 📧 Notificación para casos críticos
       if (alerts.some(a => a.level === 'CRITICO')) {
-        // TODO: Implementar sistema de notificaciones
         console.log('🚨 ALERTAS CRÍTICAS DETECTADAS - Se requiere notificación');
+        // TODO: Implementar sistema de notificaciones
       }
       
-      return successResponse(res, response, 'Archivo procesado exitosamente');
+      return successResponse(res, response, 
+        `Archivo procesado exitosamente. ${response.database.newRecords} registros nuevos agregados.`);
       
     } catch (error) {
       console.error('[UPLOAD] ❌ Error en procesamiento:', error);
       
-      // Determinar tipo de error para respuesta apropiada
-      let errorCode = 'PROCESAMIENTO_FALLIDO';
-      let statusCode = 500;
-      
-      if (error.message.includes('archivo ya fue procesado')) {
-        errorCode = 'ARCHIVO_DUPLICADO';
-        statusCode = 409; // Conflict
-      } else if (error.message.includes('no se encontr')) {
-        errorCode = 'ESTRUCTURA_INVALIDA';
-        statusCode = 400; // Bad Request
-      } else if (error.message.includes('memoria') || error.message.includes('timeout')) {
-        errorCode = 'ARCHIVO_MUY_GRANDE';
-        statusCode = 413; // Payload Too Large
+      // Rollback de transacción si existe
+      if (transaction) {
+        try {
+          await transaction.rollback();
+          console.log('[UPLOAD] 🔄 Rollback de transacción completado');
+        } catch (rollbackError) {
+          console.error('[UPLOAD] ❌ Error en rollback:', rollbackError);
+        }
       }
       
-      return errorResponse(res, errorCode, error.message, statusCode, {
-        filename: req.file?.originalname,
-        fileSize: req.file?.size,
-        timestamp: new Date().toISOString()
-      });
+      // Determinar código de error apropiado
+      const statusCode = error.message.includes('REGISTROS_INVALIDOS') ? 400 :
+                        error.message.includes('DUPLICADO') ? 409 :
+                        error.message.includes('ARCHIVO') ? 400 : 500;
+      
+      return errorResponse(res, 'PROCESAMIENTO_FALLIDO', error.message, statusCode);
     }
   }
 
-  // 📊 Obtener historial de archivos procesados
-  async getUploadHistory(req, res) {
+  // 💾 Insertar registros en la base de datos
+  async insertRecordsIntoDatabase(records, fileHash, fileName, options) {
+    console.log(`[UPLOAD] 💾 Insertando ${records.length} registros en la base de datos...`);
+    
+    // ⚠️ VERIFICACIÓN CRÍTICA: Probar conexión a BD primero
     try {
-      console.log('[UPLOAD] 📊 Obteniendo historial de archivos...');
+      await this.prisma.$queryRaw`SELECT 1`;
+      console.log(`[UPLOAD] ✅ Conexión a BD verificada correctamente`);
+    } catch (dbError) {
+      console.error(`[UPLOAD] ❌ ERROR DE CONEXIÓN A BD:`, dbError);
+      throw new Error(`Error de conexión a base de datos: ${dbError.message}`);
+    }
+    
+    const result = {
+      insertedRecords: 0,
+      duplicateRecords: 0,
+      errorRecords: 0,
+      insertedIds: [],
+      errors: []
+    };
+    
+    const batchSize = options.batchSize || 500;
+    const batches = [];
+    
+    // Dividir en lotes
+    for (let i = 0; i < records.length; i += batchSize) {
+      batches.push(records.slice(i, i + batchSize));
+    }
+    
+    console.log(`[UPLOAD] 📦 Procesando ${batches.length} lotes de hasta ${batchSize} registros...`);
+    
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      console.log(`[UPLOAD] 📦 Procesando lote ${batchIndex + 1}/${batches.length} (${batch.length} registros)...`);
       
-      const { page = 1, limit = 20, year, status } = req.query;
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-      
-      // Filtros
-      const where = {};
-      if (year) {
-        where.ano_detectado = parseInt(year);
-      }
-      if (status) {
-        where.estado_procesamiento = status.toUpperCase();
-      }
-      
-      // Consulta con paginación
-      const [archivos, total] = await Promise.all([
-        this.prisma.archivosProcesados.findMany({
-          where,
-          orderBy: { fecha_procesamiento: 'desc' },
-          skip,
-          take: parseInt(limit),
-          select: {
-            id: true,
-            nombre_archivo: true,
-            ano_detectado: true,
-            meses_detectados: true,
-            total_registros: true,
-            registros_nuevos: true,
-            registros_duplicados: true,
-            estado_procesamiento: true,
-            tiempo_procesamiento: true,
-            fecha_procesamiento: true,
-            errores_validacion: true,
-            advertencias: true
+      try {
+        // ⚠️ VERIFICACIÓN FINAL: Re-validar campos críticos antes de insertar
+        const validatedBatch = batch.filter((record, index) => {
+          const hasRequiredFields = record.placa_vehiculo && 
+                                   record.placa_vehiculo.trim() !== '' &&
+                                   record.contrato && 
+                                   record.contrato.trim() !== '' &&
+                                   record.turno && 
+                                   record.turno.trim() !== '';
+          
+          if (!hasRequiredFields) {
+            console.error(`[UPLOAD] ❌ Registro ${index + 1} rechazado por campos vacíos:`, {
+              placa: record.placa_vehiculo,
+              contrato: record.contrato,
+              turno: record.turno
+            });
+            result.errorRecords++;
           }
-        }),
-        this.prisma.archivosProcesados.count({ where })
-      ]);
-      
-      // Estadísticas generales
-      const stats = await this.prisma.archivosProcesados.aggregate({
-        where,
-        _count: true,
-        _sum: {
+          
+          return hasRequiredFields;
+        });
+        
+        console.log(`[UPLOAD] 📊 Lote ${batchIndex + 1}: ${validatedBatch.length}/${batch.length} registros válidos para insertar`);
+        
+        if (validatedBatch.length === 0) {
+          console.warn(`[UPLOAD] ⚠️ Lote ${batchIndex + 1} sin registros válidos, saltando...`);
+          continue;
+        }
+        
+        // ⚠️ INSERCIÓN UNO POR UNO CON LOGGING DETALLADO
+        for (let i = 0; i < validatedBatch.length; i++) {
+          const record = validatedBatch[i];
+          
+          try {
+            console.log(`[UPLOAD] 🔄 Insertando registro ${i + 1}/${validatedBatch.length}: ${record.placa_vehiculo}`);
+            
+            // ⚠️ CREAR REGISTRO CON CAMPOS MÍNIMOS REQUERIDOS
+            const recordToInsert = {
+              id: record.id,
+              fecha: record.fecha ? new Date(record.fecha) : new Date(),
+              conductor_nombre: record.conductor_nombre || '',
+              placa_vehiculo: record.placa_vehiculo,
+              contrato: record.contrato,
+              turno: record.turno,
+              campo_coordinacion: record.campo_coordinacion || '',
+              kilometraje: record.kilometraje || 0,
+              marca_temporal: record.marca_temporal || Date.now(),
+              nivel_riesgo: record.nivel_riesgo || 'BAJO',
+              puntaje_total: record.puntaje_total || 0,
+              observaciones: record.observaciones || '',
+              
+              // Campos boolean con valores por defecto
+              gps: record.gps || false,
+              pito: record.pito || false,
+              freno: record.freno || false,
+              frenos: record.frenos || false,
+              correas: record.correas || false,
+              espejos: record.espejos || false,
+              parqueo: record.parqueo || false,
+              puertas: record.puertas || false,
+              vidrios: record.vidrios || false,
+              baterias: record.baterias || false,
+              tapiceria: record.tapiceria || false,
+              cinturones: record.cinturones || false,
+              orden_aseo: record.orden_aseo || false,
+              suspension: record.suspension || false,
+              altas_bajas: record.altas_bajas || false,
+              horas_sueno: record.horas_sueno || false,
+              indicadores: record.indicadores || false,
+              tapa_tanque: record.tapa_tanque || false,
+              aceite_motor: record.aceite_motor || false,
+              libre_fatiga: record.libre_fatiga || false,
+              direccionales: record.direccionales || false,
+              documentacion: record.documentacion || false,
+              fluido_frenos: record.fluido_frenos || false,
+              kit_ambiental: record.kit_ambiental || false,
+              limpia_brisas: record.limpia_brisas || false,
+              espejos_estado: record.espejos_estado || 'BUENO',
+              
+              createdAt: new Date(),
+              updatedAt: new Date()
+            };
+            
+            // 🔍 LOG DEL REGISTRO A INSERTAR
+            console.log(`[UPLOAD] 📋 Datos a insertar:`, {
+              id: recordToInsert.id,
+              placa_vehiculo: recordToInsert.placa_vehiculo,
+              contrato: recordToInsert.contrato,
+              turno: recordToInsert.turno,
+              fecha: recordToInsert.fecha
+            });
+            
+            const inserted = await this.prisma.inspecciones.create({
+              data: recordToInsert
+            });
+            
+            result.insertedIds.push(inserted.id);
+            result.insertedRecords++;
+            
+            console.log(`[UPLOAD] ✅ Registro insertado: ${inserted.id} - ${record.placa_vehiculo}`);
+            
+          } catch (insertError) {
+            console.error(`[UPLOAD] ❌ Error insertando registro ${i + 1}:`, insertError);
+            console.error(`[UPLOAD] ❌ Registro problemático:`, {
+              placa: record.placa_vehiculo,
+              contrato: record.contrato,
+              turno: record.turno,
+              error: insertError.message,
+              code: insertError.code
+            });
+            
+            if (insertError.code === 'P2002') {
+              // Duplicado detectado
+              result.duplicateRecords++;
+              console.log(`[UPLOAD] ⚠️ Duplicado detectado: ${record.placa_vehiculo}`);
+            } else {
+              result.errorRecords++;
+              result.errors.push({
+                record: record.placa_vehiculo,
+                error: insertError.message,
+                code: insertError.code
+              });
+            }
+          }
+        }
+        
+        console.log(`[UPLOAD] ✅ Lote ${batchIndex + 1} completado: ${result.insertedRecords} total insertados hasta ahora`);
+        
+      } catch (error) {
+        console.error(`[UPLOAD] ❌ Error procesando lote ${batchIndex + 1}:`, error);
+        result.errorRecords += batch.length;
+        result.errors.push({
+          batch: batchIndex + 1,
+          error: error.message
+        });
+      }
+    }
+    
+    console.log(`[UPLOAD] ✅ Inserción completada:`, {
+      insertados: result.insertedRecords,
+      duplicados: result.duplicateRecords,
+      errores: result.errorRecords,
+      total: records.length,
+      idsInsertados: result.insertedIds.slice(0, 5) // Solo los primeros 5 IDs para el log
+    });
+    
+    // ⚠️ VERIFICACIÓN POST-INSERCIÓN
+    if (result.insertedRecords > 0) {
+      try {
+        const countInDB = await this.prisma.inspecciones.count({
+          where: {
+            id: { in: result.insertedIds.slice(0, 10) } // Verificar los primeros 10
+          }
+        });
+        console.log(`[UPLOAD] 🔍 Verificación: ${countInDB} registros confirmados en BD`);
+      } catch (verifyError) {
+        console.error(`[UPLOAD] ⚠️ Error verificando inserción:`, verifyError);
+      }
+    }
+    
+    return result;
+  }
+
+  // 📊 Verificar archivo duplicado
+  async checkDuplicateFile(fileHash) {
+    try {
+      const existing = await this.prisma.archivos_procesados.findUnique({
+        where: { hash_archivo: fileHash },
+        select: {
+          id: true,
+          nombre_archivo: true,
+          fecha_procesamiento: true,
           total_registros: true,
-          registros_nuevos: true,
-          registros_duplicados: true
-        },
-        _avg: {
-          tiempo_procesamiento: true
+          estado: true
         }
       });
       
-      const response = {
-        uploads: archivos.map(archivo => ({
-          id: archivo.id,
-          fileName: archivo.nombre_archivo,
-          uploadDate: archivo.fecha_procesamiento,
-          totalRecords: archivo.total_registros,
-          newRecords: archivo.registros_nuevos,
-          duplicateRecords: archivo.registros_duplicados,
-          processingTime: archivo.tiempo_procesamiento,
-          status: archivo.estado_procesamiento,
-          user: archivo.usuario || undefined
-        })),
-        totalCount: total,
-        totalPages: Math.ceil(total / parseInt(limit)),
-        currentPage: parseInt(page)
-      };
-      console.log('[UPLOAD] ✅ Historial obtenido:', {
-        uploads: response.uploads.length,
-        total: response.totalCount
-      });
-      return successResponse(res, response, 'Historial obtenido exitosamente');
-      
+      return existing;
     } catch (error) {
-      console.error('[UPLOAD] ❌ Error obteniendo historial:', error);
-      return errorResponse(res, 'HISTORIAL_ERROR', error.message, 500);
+      console.warn('[UPLOAD] ⚠️ Error verificando archivo duplicado:', error);
+      return null;
     }
   }
 
-  // 🗑️ Revertir procesamiento de archivo
-  async revertUpload(req, res) {
+  // 💾 Guardar registro del archivo procesado
+  async saveProcessedFileRecord(file, processingResult, insertResult) {
     try {
-      const { fileId } = req.params;
-      console.log(`[UPLOAD] 🗑️ Revirtiendo procesamiento de archivo: ${fileId}`);
-      
-      // Buscar archivo
-      const archivo = await this.prisma.archivosProcesados.findUnique({
-        where: { id: fileId }
-      });
-      
-      if (!archivo) {
-        return errorResponse(res, 'ARCHIVO_NO_ENCONTRADO', 'Archivo no encontrado', 404);
-      }
-      
-      // Eliminar registros asociados al archivo
-      // (Esto requeriría una relación en el esquema o un campo de tracking)
-      // Por ahora, eliminar por período y fecha de procesamiento
-      const fechaInicio = new Date(archivo.fecha_procesamiento);
-      fechaInicio.setHours(0, 0, 0, 0);
-      const fechaFin = new Date(archivo.fecha_procesamiento);
-      fechaFin.setHours(23, 59, 59, 999);
-      
-      const deletedInspections = await this.prisma.inspeccion.deleteMany({
-        where: {
-          ano: archivo.ano_detectado,
-          mes: { in: archivo.meses_detectados },
-          createdAt: {
-            gte: fechaInicio,
-            lte: fechaFin
-          }
+      await this.prisma.archivos_procesados.create({
+        data: {
+          nombre_archivo: file.originalname,
+          hash_archivo: processingResult.fileHash,
+          tamano_archivo: file.size,
+          total_registros: processingResult.totalRecords,
+          registros_insertados: insertResult.insertedRecords,
+          registros_duplicados: insertResult.duplicateRecords,
+          registros_error: insertResult.errorRecords,
+          ano_detectado: processingResult.dateInfo?.año,
+          tiempo_procesamiento: processingResult.processingTime,
+          errores_validacion: insertResult.errors,
+          estado: insertResult.errorRecords > 0 ? 'CON_ERRORES' : 'PROCESADO',
+          fecha_procesamiento: new Date()
         }
       });
       
-      // Eliminar registro del archivo
-      await this.prisma.archivosProcesados.delete({
-        where: { id: fileId }
-      });
-      
-      const response = {
-        success: true,
-        fileName: archivo.nombre_archivo,
-        deletedInspections: deletedInspections.count,
-        period: `${archivo.ano_detectado} - Meses: ${archivo.meses_detectados.join(', ')}`
-      };
-      
-      console.log('[UPLOAD] ✅ Reversión exitosa:', response);
-      return successResponse(res, response, 'Archivo revertido exitosamente');
-      
+      console.log('[UPLOAD] 💾 Registro de archivo procesado guardado');
     } catch (error) {
-      console.error('[UPLOAD] ❌ Error revirtiendo archivo:', error);
-      return errorResponse(res, 'REVERSION_FALLIDA', error.message, 500);
+      console.error('[UPLOAD] ⚠️ Error guardando registro de archivo procesado:', error);
     }
   }
 
-  // 💡 Generar recomendaciones para el usuario
+  // 📊 Generar estadísticas del procesamiento
+  async generateProcessingStats(insertResult) {
+    // Implementar estadísticas específicas
+    return {
+      successRate: Math.round((insertResult.insertedRecords / (insertResult.insertedRecords + insertResult.errorRecords)) * 100),
+      processingSpeed: insertResult.insertedRecords / (insertResult.processingTime / 1000), // registros por segundo
+      errorRate: Math.round((insertResult.errorRecords / (insertResult.insertedRecords + insertResult.errorRecords)) * 100)
+    };
+  }
+
+  // 🚨 Generar alertas del procesamiento
+  async generateAlerts(validationResult) {
+    const alerts = [];
+    
+    // Alerta por alta tasa de errores
+    if (validationResult.summary.successRate < 80) {
+      alerts.push({
+        type: 'ALTA_TASA_ERRORES',
+        level: 'ADVERTENCIA',
+        message: `Tasa de éxito baja: ${validationResult.summary.successRate}%`,
+        recommendation: 'Revisar formato del archivo Excel'
+      });
+    }
+    
+    // Alertas críticas de seguridad
+    if (validationResult.criticalAlerts.length > 0) {
+      alerts.push({
+        type: 'ALERTAS_SEGURIDAD',
+        level: 'CRITICO',
+        message: `${validationResult.criticalAlerts.length} alertas críticas de seguridad detectadas`,
+        recommendation: 'Revisar inspecciones marcadas como críticas'
+      });
+    }
+    
+    return alerts;
+  }
+
+  // 📋 Generar recomendaciones
   generateRecommendations(analysis) {
     const recommendations = [];
     
-    // Recomendaciones de tamaño de archivo
-    if (analysis.totalRows > 10000) {
-      recommendations.push({
-        type: 'performance',
-        level: 'info',
-        message: 'Archivo grande detectado. El procesamiento puede tomar varios minutos.',
-        action: 'Considere procesar durante horas de menor actividad'
-      });
+    if (analysis.columnMapping.missing.length > 0) {
+      recommendations.push(`Verificar nombres de columnas: ${analysis.columnMapping.missing.join(', ')}`);
     }
     
-    // Recomendaciones de duplicados
-    if (analysis.dateInfo.esArchivoAnual) {
-      recommendations.push({
-        type: 'data',
-        level: 'success',
-        message: 'Archivo anual detectado correctamente.',
-        action: `Se procesarán datos de ${analysis.dateInfo.meses.length} meses del año ${analysis.dateInfo.año}`
-      });
+    if (analysis.totalRows > 5000) {
+      recommendations.push('Archivo grande detectado - el procesamiento puede tomar varios minutos');
     }
     
-    // Recomendaciones de estructura
-    if (analysis.columnAnalysis.some(col => col.possibleMappings.includes('consumo_medicamentos'))) {
-      recommendations.push({
-        type: 'feature',
-        level: 'success',
-        message: 'Columnas de fatiga del conductor detectadas.',
-        action: 'Se aplicarán las nuevas reglas de alertas rojas y advertencias'
-      });
+    if (!analysis.dateInfo?.año) {
+      recommendations.push('No se detectó año en las fechas - verificar formato de fechas');
     }
     
     return recommendations;
   }
 
-  // 📊 Generar estadísticas de procesamiento
-  async generateProcessingStats(result) {
-    try {
-      // Obtener estadísticas de la base de datos
-      const totalInspecciones = await this.prisma.inspeccion.count();
-      const alertasRojas = await this.prisma.inspeccion.count({
-        where: { tiene_alerta_roja: true }
-      });
-      const advertencias = await this.prisma.inspeccion.count({
-        where: { tiene_advertencias: true }
-      });
-      
-      return {
-        database: {
-          totalInspecciones,
-          alertasRojas,
-          advertencias,
-          porcentajeAlertasRojas: totalInspecciones > 0 ? 
-            Math.round((alertasRojas / totalInspecciones) * 100 * 100) / 100 : 0
-        },
-        processing: {
-          efficiency: result.totalRecords > 0 ? 
-            Math.round((result.newRecords / result.totalRecords) * 100 * 100) / 100 : 0,
-          duplicateRate: result.totalRecords > 0 ?
-            Math.round((result.duplicateRecords / result.totalRecords) * 100 * 100) / 100 : 0,
-          errorRate: result.totalRecords > 0 ?
-            Math.round((result.errorRecords / result.totalRecords) * 100 * 100) / 100 : 0
-        }
-      };
-    } catch (error) {
-      console.error('[UPLOAD] Error generando estadísticas:', error);
-      return { database: {}, processing: {} };
-    }
-  }
-
-  // 🚨 Generar alertas basadas en el resultado
-  async generateAlerts(result) {
-    const alerts = [];
-    
-    // Alerta por alta tasa de errores
-    if (result.errorRecords > result.newRecords * 0.1) { // Más del 10% errores
-      alerts.push({
-        level: 'CRITICO',
-        type: 'CALIDAD_DATOS',
-        message: `Alta tasa de errores: ${result.errorRecords} de ${result.totalRecords} registros`,
-        action: 'Revisar formato del archivo Excel',
-        priority: 1
-      });
-    }
-    
-    // Alerta por muchos duplicados
-    if (result.duplicateRecords > result.totalRecords * 0.5) { // Más del 50% duplicados
-      alerts.push({
-        level: 'ADVERTENCIA',
-        type: 'DUPLICADOS',
-        message: `Alto número de duplicados: ${result.duplicateRecords} registros`,
-        action: 'Verificar si el archivo ya fue procesado anteriormente',
-        priority: 2
-      });
-    }
-    
-    // Alerta por período sospechoso
-    if (result.dateInfo.año < new Date().getFullYear() - 2) {
-      alerts.push({
-        level: 'ADVERTENCIA',
-        type: 'PERIODO',
-        message: `Datos antiguos detectados: año ${result.dateInfo.año}`,
-        action: 'Confirmar que estos datos históricos son correctos',
-        priority: 3
-      });
-    }
-    
-    return alerts.sort((a, b) => a.priority - b.priority);
-  }
-
-  // ➡️ Generar próximos pasos recomendados
+  // 📝 Generar próximos pasos
   generateNextSteps(result, alerts) {
     const steps = [];
     
-    if (result.newRecords > 0) {
-      steps.push({
-        step: 1,
-        action: 'Revisar Dashboard',
-        description: `Se han agregado ${result.newRecords} nuevos registros. Revisar estadísticas actualizadas.`,
-        url: '/dashboard'
-      });
+    if (result.insertedRecords > 0) {
+      steps.push(`Revisar ${result.insertedRecords} registros insertados en el dashboard`);
     }
     
     if (alerts.some(a => a.level === 'CRITICO')) {
-      steps.push({
-        step: 2,
-        action: 'Resolver Alertas Críticas',
-        description: 'Hay problemas críticos que requieren atención inmediata.',
-        url: '/alerts'
-      });
+      steps.push('Atender alertas críticas de seguridad inmediatamente');
     }
     
-    steps.push({
-      step: steps.length + 1,
-      action: 'Verificar Datos',
-      description: 'Buscar y revisar algunos registros procesados para confirmar la calidad.',
-      url: '/search'
-    });
+    if (result.errorRecords > 0) {
+      steps.push(`Revisar ${result.errorRecords} registros con errores`);
+    }
     
     return steps;
+  }
+
+  // 📊 Resumir errores de validación
+  summarizeValidationErrors(invalidRecords) {
+    const errorSummary = {};
+    
+    invalidRecords.forEach(invalid => {
+      invalid.validation.errors.forEach(error => {
+        const key = `${error.field}_${error.type}`;
+        if (!errorSummary[key]) {
+          errorSummary[key] = {
+            field: error.field,
+            type: error.type,
+            message: error.message,
+            count: 0
+          };
+        }
+        errorSummary[key].count++;
+      });
+    });
+    
+    return Object.values(errorSummary).sort((a, b) => b.count - a.count);
   }
 }
 

@@ -1,270 +1,221 @@
-// 🗄️ CONFIGURACIÓN DE BASE DE DATOS CON PRISMA
-// src/config/database.js
+// 📄 ARCHIVO: backend/src/config/database.js
+// 🔧 Configuración de conexión a base de datos con Prisma
 
 const { PrismaClient } = require('@prisma/client');
 
-// 🔧 Configuración del cliente Prisma
-const prismaConfig = {
-  // Configuración de logging basada en entorno
-  log: process.env.NODE_ENV === 'production' 
-    ? ['error', 'warn']
-    : ['query', 'info', 'warn', 'error'],
-    
-  // Configuración de errores
-  errorFormat: 'pretty',
-  
-  // Configuración de conexiones para mejor rendimiento
-  datasources: {
-    db: {
-      url: process.env.DATABASE_URL
-    }
-  }
-};
+let prisma = null;
 
-// 🏭 Singleton del cliente Prisma
-let prisma;
-
-// 🔗 Función para crear conexión
-const createPrismaClient = () => {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL no está definida en las variables de entorno');
-  }
-
-  console.log('[DB] Creando cliente Prisma...');
-  console.log('[DB] Database URL configurada:', process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@'));
-  
-  const client = new PrismaClient(prismaConfig);
-  
-  // 📊 Event listeners para monitoreo
-  client.$on('query', (e) => {
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[DB-QUERY] ${e.query} - ${e.duration}ms`);
-    }
-  });
-  
-  client.$on('error', (e) => {
-    console.error('[DB-ERROR]', e);
-  });
-  
-  client.$on('warn', (e) => {
-    console.warn('[DB-WARN]', e);
-  });
-  
-  // 🔌 Hook de conexión
-  client.$connect()
-    .then(() => console.log('[DB] ✅ Cliente Prisma conectado exitosamente'))
-    .catch((error) => console.error('[DB] ❌ Error conectando cliente Prisma:', error));
-  
-  return client;
-};
-
-// 🔗 Función para obtener o crear cliente
-const getPrismaClient = () => {
+/**
+ * Obtener instancia singleton de PrismaClient
+ * @returns {PrismaClient} Instancia de Prisma
+ */
+function getPrismaClient() {
   if (!prisma) {
-    prisma = createPrismaClient();
-  }
-  return prisma;
-};
-
-// 🚀 Función de conexión a la base de datos
-const connectDatabase = async () => {
-  try {
-    const client = getPrismaClient();
+    console.log('[DB] Inicializando cliente Prisma...');
     
-    // Verificar conexión con una query simple
-    await client.$queryRaw`SELECT 1 as connected`;
-    
-    console.log('[DB] ✅ Conexión a la base de datos verificada');
-    
-    // 🧪 Verificar si las tablas existen
-    try {
-      await client.inspeccion.count();
-      console.log('[DB] ✅ Tablas de la base de datos accesibles');
-    } catch (error) {
-      console.warn('[DB] ⚠️  Las tablas pueden no existir aún. Ejecuta: npx prisma db push');
+    // Verificar que la URL de la base de datos esté configurada
+    if (!process.env.DATABASE_URL) {
+      console.error('[DB] ❌ DATABASE_URL no está configurada en las variables de entorno');
+      throw new Error('DATABASE_URL es requerida');
     }
     
-    return client;
-  } catch (error) {
-    console.error('[DB] ❌ Error conectando a la base de datos:', error);
-    throw new Error(`Error de conexión a la base de datos: ${error.message}`);
+    // Log de la URL (ocultando credenciales)
+    const dbUrl = process.env.DATABASE_URL;
+    const maskedUrl = dbUrl.replace(/:[^:@]*@/, ':****@');
+    console.log('[DB] Database URL configurada:', maskedUrl);
+    
+    try {
+      prisma = new PrismaClient({
+        datasources: {
+          db: {
+            url: process.env.DATABASE_URL
+          }
+        },
+        log: process.env.NODE_ENV === 'development' 
+          ? ['query', 'info', 'warn', 'error']
+          : ['error'],
+        errorFormat: 'pretty'
+      });
+      
+      console.log('[DB] ✅ Cliente Prisma inicializado correctamente');
+      
+      // Configurar middleware de logging para queries lentas
+      if (process.env.NODE_ENV === 'development') {
+        prisma.$use(async (params, next) => {
+          const start = Date.now();
+          const result = await next(params);
+          const end = Date.now();
+          const time = end - start;
+          
+          if (time > 1000) { // Queries que toman más de 1 segundo
+            console.log(`[DB] 🐌 Query lenta detectada: ${params.model}.${params.action} - ${time}ms`);
+          }
+          
+          return result;
+        });
+      }
+      
+    } catch (error) {
+      console.error('[DB] ❌ Error inicializando Prisma:', error);
+      throw error;
+    }
   }
-};
+  
+  return prisma;
+}
 
-// 🔌 Función de desconexión
-const disconnectDatabase = async () => {
+/**
+ * Probar conexión a la base de datos
+ * @returns {Promise<boolean>} True si la conexión es exitosa
+ */
+async function testConnection() {
+  try {
+    console.log('[DB] 🔍 Probando conexión a la base de datos...');
+    
+    const client = getPrismaClient();
+    await client.$queryRaw`SELECT 1`;
+    
+    console.log('[DB] ✅ Conexión a base de datos exitosa');
+    return true;
+  } catch (error) {
+    console.error('[DB] ❌ Error de conexión a base de datos:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Cerrar conexión a la base de datos
+ */
+async function closeConnection() {
   if (prisma) {
     try {
+      console.log('[DB] 🔄 Cerrando conexión a base de datos...');
       await prisma.$disconnect();
-      console.log('[DB] 🔌 Base de datos desconectada');
       prisma = null;
+      console.log('[DB] ✅ Conexión cerrada correctamente');
     } catch (error) {
-      console.error('[DB] ❌ Error desconectando la base de datos:', error);
+      console.error('[DB] ❌ Error cerrando conexión:', error);
     }
   }
-};
+}
 
-// 🧪 Función de health check de la base de datos
-const databaseHealthCheck = async () => {
+/**
+ * Verificar estado de las tablas principales
+ * @returns {Promise<Object>} Estado de las tablas
+ */
+async function checkDatabaseHealth() {
   try {
-    const startTime = Date.now();
     const client = getPrismaClient();
     
-    // Test de conectividad básico
-    await client.$queryRaw`SELECT 1 as health_check`;
-    const responseTime = Date.now() - startTime;
+    console.log('[DB] 🔍 Verificando salud de la base de datos...');
     
-    // Test de conteo de registros
-    const totalInspecciones = await client.inspeccion.count();
-    const totalArchivos = await client.archivosProcesados.count();
+    // Verificar que las tablas principales existan
+    const tableChecks = await Promise.allSettled([
+      client.inspecciones.count(),
+      client.archivos_procesados.count().catch(() => 0) // Esta tabla podría no existir aún
+    ]);
     
-    return {
-      status: 'healthy',
-      responseTime: `${responseTime}ms`,
-      totalInspecciones,
-      totalArchivos,
+    const inspecciones = tableChecks[0].status === 'fulfilled' ? tableChecks[0].value : 0;
+    const archivos = tableChecks[1].status === 'fulfilled' ? tableChecks[1].value : 0;
+    
+    const health = {
+      connected: true,
+      tables: {
+        inspecciones: {
+          exists: tableChecks[0].status === 'fulfilled',
+          count: inspecciones
+        },
+        archivos_procesados: {
+          exists: tableChecks[1].status === 'fulfilled',
+          count: archivos
+        }
+      },
       timestamp: new Date().toISOString()
     };
+    
+    console.log('[DB] ✅ Verificación de salud completada:', health);
+    return health;
+    
   } catch (error) {
+    console.error('[DB] ❌ Error verificando salud de BD:', error);
     return {
-      status: 'unhealthy',
+      connected: false,
       error: error.message,
       timestamp: new Date().toISOString()
     };
   }
-};
+}
 
-// 🔄 Función para reiniciar conexión si es necesario
-const reconnectDatabase = async () => {
-  console.log('[DB] 🔄 Reiniciando conexión a la base de datos...');
-  
+/**
+ * Ejecutar migraciones pendientes (si las hay)
+ */
+async function runMigrations() {
   try {
-    await disconnectDatabase();
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Esperar 1 segundo
-    return await connectDatabase();
-  } catch (error) {
-    console.error('[DB] ❌ Error reiniciando la base de datos:', error);
-    throw error;
-  }
-};
-
-// 📊 Función para obtener estadísticas de la base de datos
-const getDatabaseStats = async () => {
-  try {
-    const client = getPrismaClient();
+    console.log('[DB] 🔄 Verificando migraciones...');
     
-    const stats = await Promise.all([
-      client.inspeccion.count(),
-      client.inspeccion.count({ where: { tiene_alerta_roja: true } }),
-      client.inspeccion.count({ where: { tiene_advertencias: true } }),
-      client.historialConductor.count(),
-      client.archivosProcesados.count()
-    ]);
+    // En producción, las migraciones deberían ejecutarse manualmente
+    if (process.env.NODE_ENV === 'production') {
+      console.log('[DB] ⚠️ En producción - migraciones deben ejecutarse manualmente');
+      return;
+    }
     
-    return {
-      totalInspecciones: stats[0],
-      alertasRojas: stats[1], 
-      advertencias: stats[2],
-      conductores: stats[3],
-      archivos: stats[4],
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    console.error('[DB] Error obteniendo estadísticas:', error);
-    return null;
-  }
-};
-
-// 🧹 Función de limpieza y optimización
-const optimizeDatabase = async () => {
-  try {
-    const client = getPrismaClient();
+    // En desarrollo, podemos intentar aplicar migraciones
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
     
-    console.log('[DB] 🧹 Iniciando optimización de base de datos...');
-    
-    // Eliminar archivos procesados antiguos (más de 90 días)
-    const fecha90Dias = new Date();
-    fecha90Dias.setDate(fecha90Dias.getDate() - 90);
-    
-    const archivosEliminados = await client.archivosProcesados.deleteMany({
-      where: {
-        fecha_procesamiento: {
-          lt: fecha90Dias
-        }
-      }
-    });
-    
-    console.log(`[DB] 🗑️  Eliminados ${archivosEliminados.count} archivos antiguos`);
-    
-    // Actualizar métricas
-    await client.metricasReporte.deleteMany({
-      where: {
-        fecha_reporte: {
-          lt: fecha90Dias
-        }
-      }
-    });
-    
-    console.log('[DB] ✅ Optimización completada');
-    
-    return {
-      archivosEliminados: archivosEliminados.count,
-      fecha: new Date().toISOString()
-    };
-  } catch (error) {
-    console.error('[DB] ❌ Error durante la optimización:', error);
-    throw error;
-  }
-};
-
-// 🧪 Testing de queries para desarrollo
-const testDatabaseQueries = async () => {
-  if (process.env.NODE_ENV === 'production') {
-    console.log('[DB] Tests de queries deshabilitados en producción');
-    return;
-  }
-  
-  try {
-    const client = getPrismaClient();
-    
-    console.log('[DB] 🧪 Ejecutando tests de queries...');
-    
-    // Test 1: Query básica
-    const basicQuery = await client.inspeccion.findMany({
-      take: 1
-    });
-    
-    // Test 2: Query con relaciones
-    const relationQuery = await client.inspeccion.findFirst({
-      include: {
-        historial: true
-      }
-    });
-    
-    // Test 3: Agregaciones
-    const aggregateQuery = await client.inspeccion.aggregate({
-      _count: true,
-      _avg: {
-        puntaje_total: true
-      }
-    });
-    
-    console.log('[DB] ✅ Tests de queries exitosos');
-    console.log('[DB] Basic query count:', basicQuery.length);
-    console.log('[DB] Aggregate result:', aggregateQuery);
+    try {
+      console.log('[DB] 🔄 Ejecutando: npx prisma migrate deploy...');
+      const { stdout, stderr } = await execAsync('npx prisma migrate deploy');
+      
+      if (stdout) console.log('[DB] 📝 Migraciones:', stdout);
+      if (stderr) console.error('[DB] ⚠️ Avisos:', stderr);
+      
+      console.log('[DB] ✅ Migraciones aplicadas');
+    } catch (migrationError) {
+      console.log('[DB] ⚠️ No se pudieron ejecutar migraciones automáticamente');
+      console.log('[DB] 💡 Ejecuta manualmente: npx prisma migrate deploy');
+    }
     
   } catch (error) {
-    console.error('[DB] ❌ Error en tests de queries:', error);
+    console.error('[DB] ❌ Error en migraciones:', error);
   }
-};
+}
+
+/**
+ * Limpiar cache de consultas
+ */
+async function clearCache() {
+  try {
+    if (prisma) {
+      // Prisma no tiene cache explícito, pero podemos reinicializar la conexión
+      await closeConnection();
+      getPrismaClient();
+      console.log('[DB] ✅ Cache limpiado (conexión reinicializada)');
+    }
+  } catch (error) {
+    console.error('[DB] ❌ Error limpiando cache:', error);
+  }
+}
+
+// 🔧 **MANEJO DE EVENTOS DE PROCESO**
+process.on('beforeExit', async () => {
+  await closeConnection();
+});
+
+process.on('SIGINT', async () => {
+  await closeConnection();
+});
+
+process.on('SIGTERM', async () => {
+  await closeConnection();
+});
 
 module.exports = {
   getPrismaClient,
-  connectDatabase,
-  disconnectDatabase,
-  databaseHealthCheck,
-  reconnectDatabase,
-  getDatabaseStats,
-  optimizeDatabase,
-  testDatabaseQueries
+  testConnection,
+  closeConnection,
+  checkDatabaseHealth,
+  runMigrations,
+  clearCache
 };
