@@ -1,5 +1,5 @@
-// 📄 ARCHIVO: prisma/schema.prisma
-// 🔧 Esquema de base de datos - VERIFICAR QUE COINCIDA
+// 📄 ARCHIVO: backend/prisma/schema.prisma
+// 🔧 ESQUEMA COMPLETO CON TODOS LOS CAMPOS DE FATIGA Y VEHÍCULO
 
 generator client {
   provider = "prisma-client-js"
@@ -13,7 +13,7 @@ datasource db {
 model inspecciones {
   id                   String   @id @default(cuid())
   
-  // 🎯 CAMPOS OBLIGATORIOS - CRÍTICOS
+  // 🎯 CAMPOS OBLIGATORIOS
   placa_vehiculo       String   // ⚠️ NO PUEDE SER NULL
   contrato             String   // ⚠️ NO PUEDE SER NULL  
   turno                String   // ⚠️ NO PUEDE SER NULL
@@ -25,40 +25,64 @@ model inspecciones {
   kilometraje          Int      @default(0)
   marca_temporal       BigInt   @default(0)
   
-  // 📋 CAMPOS DE EVALUACIÓN
+  // 🚨 CAMPOS DE FATIGA DEL CONDUCTOR (CRÍTICOS - AGREGADOS)
+  consumo_medicamentos      Boolean  @default(false)  // ¿Ha consumido medicamentos?
+  horas_sueno_suficientes   Boolean  @default(true)   // ¿Ha dormido al menos 7 horas?
+  libre_sintomas_fatiga     Boolean  @default(true)   // ¿Libre de síntomas fatiga?
+  condiciones_aptas         Boolean  @default(true)   // ¿En condiciones para conducir?
+  
+  // ✅ CAMPOS DE INSPECCIÓN VEHICULAR
+  altas_bajas          Boolean  @default(false)  // ** ALTAS Y BAJAS
+  direccionales        Boolean  @default(false)  // DIRECCIONALES DERECHA E IZQUIERDA
+  parqueo              Boolean  @default(false)  // **DE PARQUEO
+  freno                Boolean  @default(false)  // **DE FRENO
+  frenos               Boolean  @default(false)  // **FRENOS
+  espejos              Boolean  @default(false)  // **ESPEJO CENTRAL Y LATERALES
+  vidrios              Boolean  @default(false)  // **VIDRIO FRONTAL
+  orden_aseo           Boolean  @default(false)  // PRESENTACIÓN DE ORDEN Y ASEO
+  pito                 Boolean  @default(false)  // PITO
+  gps                  Boolean  @default(false)  // SISTEMA DE MONITOREO GPS
+  frenos_emergencia    Boolean  @default(false)  // **FRENOS DE EMERGENCIA O DE MANO
+  cinturones           Boolean  @default(false)  // **CINTURONES DE SEGURIDAD
+  puertas              Boolean  @default(false)  // PUERTAS EN BUEN ESTADO
+  vidrios_estado       Boolean  @default(false)  // VIDRIOS EN BUEN ESTADO
+  limpia_brisas        Boolean  @default(false)  // **LIMPIA BRISAS
+  extintor_vigente     Boolean  @default(false)  // EXTINTOR VIGENTE
+  botiquin_completo    Boolean  @default(false)  // BOTIQUÍN
+  tapiceria            Boolean  @default(false)  // ESTADO GENERAL DE TAPICERÍA
+  indicadores          Boolean  @default(false)  // Indicadores (combustible, temp, etc)
+  
+  // 🔧 CAMPOS DE FLUIDOS Y MECÁNICA
+  aceite_motor         Boolean  @default(false)  // **NIVELES DE FLUIDOS ACEITE MOTOR
+  fluido_frenos        Boolean  @default(false)  // **NIVELES DE FLUIDO DE FRENOS
+  fluido_direccion     Boolean  @default(false)  // **FLUIDO DE DIRECCIÓN HIDRÁULICA
+  fluido_refrigerante  Boolean  @default(false)  // **FLUIDO REFRIGERANTE
+  fluido_limpiabrisas  Boolean  @default(false)  // FLUIDO LIMPIA PARABRISAS
+  correas              Boolean  @default(false)  // ESTADO DE CORREAS
+  baterias             Boolean  @default(false)  // ESTADO DE BATERÍAS, CABLES, CONEXIONES
+  
+  // 🚗 CAMPOS DE LLANTAS Y SUSPENSIÓN
+  llantas_labrado      Boolean  @default(false)  // **LLANTAS - LABRADO (min 2mm)
+  llantas_cortaduras   Boolean  @default(false)  // **LLANTAS - SIN CORTADURAS
+  llanta_repuesto      Boolean  @default(false)  // LLANTA DE REPUESTO
+  copas_pernos         Boolean  @default(false)  // **COPAS O PERNOS DE SUJECIÓN
+  suspension           Boolean  @default(false)  // **SUSPENSIÓN (TERMINALES)
+  direccion            Boolean  @default(false)  // **DIRECCIÓN (TERMINALES)
+  
+  // 📋 CAMPOS DE EQUIPAMIENTO
+  tapa_tanque          Boolean  @default(false)  // Tapa de tanque de combustible
+  kit_carretera        Boolean  @default(false)  // Equipo de carretera completo
+  kit_ambiental        Boolean  @default(false)  // Kit ambiental
+  documentacion        Boolean  @default(false)  // Documentación completa
+  
+  // 🚗 OBSERVACIONES DEL VEHÍCULO (NO del conductor)
+  observaciones        String   @default("")  // Problemas del vehículo
+  
+  // 📊 CAMPOS CALCULADOS
   nivel_riesgo         String   @default("BAJO")
   puntaje_total        Int      @default(0)
-  observaciones        String   @default("")
-  
-  // ✅ CAMPOS DE INSPECCIÓN BOOLEAN
-  gps                  Boolean  @default(false)
-  pito                 Boolean  @default(false)
-  freno                Boolean  @default(false)
-  frenos               Boolean  @default(false)
-  correas              Boolean  @default(false)
-  espejos              Boolean  @default(false)
-  parqueo              Boolean  @default(false)
-  puertas              Boolean  @default(false)
-  vidrios              Boolean  @default(false)
-  baterias             Boolean  @default(false)
-  tapiceria            Boolean  @default(false)
-  cinturones           Boolean  @default(false)
-  orden_aseo           Boolean  @default(false)
-  suspension           Boolean  @default(false)
-  altas_bajas          Boolean  @default(false)
-  horas_sueno          Boolean  @default(false)
-  indicadores          Boolean  @default(false)
-  tapa_tanque          Boolean  @default(false)
-  aceite_motor         Boolean  @default(false)
-  libre_fatiga         Boolean  @default(false)
-  direccionales        Boolean  @default(false)
-  documentacion        Boolean  @default(false)
-  fluido_frenos        Boolean  @default(false)
-  kit_ambiental        Boolean  @default(false)
-  limpia_brisas        Boolean  @default(false)
-  
-  // 🔍 CAMPOS DE ESTADO
-  espejos_estado       String   @default("BUENO")
+  puntaje_fatiga       Int      @default(0)        // Puntaje específico de fatiga
+  tiene_alertas_criticas Boolean @default(false)   // Para medicamentos u otros críticos
   
   // ⏰ CAMPOS DE AUDITORÍA
   createdAt            DateTime @default(now())
@@ -71,6 +95,9 @@ model inspecciones {
   @@index([placa_vehiculo])
   @@index([contrato])
   @@index([fecha])
+  @@index([conductor_nombre])
+  @@index([consumo_medicamentos])
+  @@index([tiene_alertas_criticas])
   @@index([marca_temporal])
 }
 
@@ -89,10 +116,11 @@ model archivos_procesados {
   advertencias          Json?
   fecha_procesamiento   DateTime @default(now())
   usuario_carga         String?
-  estado                String   @default("PROCESADO") // PROCESADO, ERROR, REVERTIDO, CON_ERRORES
+  estado                String   @default("PROCESADO")
 
   @@index([ano_detectado])
   @@index([fecha_procesamiento])
+  @@index([hash_archivo])
 }
 
 model historial_conductores {
